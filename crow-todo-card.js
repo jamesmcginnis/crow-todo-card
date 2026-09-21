@@ -2,7 +2,116 @@
 // Apple-style Home Assistant `todo` entity card — glassmorphism panels,
 // SF Pro font stack, #007AFF accent, conversation/process-routed AI features.
 
-class TigerTodoCard extends HTMLElement {
+// ═══════════════════════════════════════════════════════════════════
+//  COLOUR TOOLS — keeps any picked colour legible in light AND dark mode
+// ═══════════════════════════════════════════════════════════════════
+
+function _hex2rgb(hex) {
+  let h = String(hex).replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function _rgb2hex(r, g, b) {
+  return '#' + [r, g, b].map(v => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0')).join('');
+}
+function _rgb2hsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+  let h = 0, s = 0;
+  if (mx !== mn) {
+    const d = mx - mn;
+    s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h *= 60;
+  }
+  return [h, s, l];
+}
+function _hsl2hex(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0]; else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x]; else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c]; else [r, g, b] = [c, 0, x];
+  return _rgb2hex((r + m) * 255, (g + m) * 255, (b + m) * 255);
+}
+function _lum(hex) {
+  const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const [r, g, b] = _hex2rgb(hex);
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+function _contrast(a, b) {
+  const la = _lum(a), lb = _lum(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+function isHex(v) { return typeof v === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v.trim()); }
+function hexA(hex, a) {
+  const [r, g, b] = _hex2rgb(hex);
+  return `rgba(${r},${g},${b},${Math.round(a * 100) / 100})`;
+}
+
+// Approximate surfaces the card sits on (glass over a typical HA dashboard).
+const CC_SURFACE = { dark: '#34343a', light: '#f6f6f9' };
+
+// Nudge lightness (keeping hue + saturation) until `min` contrast is met.
+function _ensure(h, s, l, bg, min, dir) {
+  let hex = _hsl2hex(h, s, l);
+  for (let i = 0; i < 60 && _contrast(hex, bg) < min; i++) {
+    l = Math.min(0.97, Math.max(0.03, l + dir * 0.015));
+    hex = _hsl2hex(h, s, l);
+  }
+  return hex;
+}
+
+const _tuneCache = {};
+// One picked colour → { c1, c2, dot, text } that reads in this mode.
+//   dot  : icons / graphics (≥3:1 on the surface)
+//   text : status text (≥4.5:1 on the surface)
+function tuneColor(base, dark) {
+  const key = `${base}|${dark}`;
+  if (_tuneCache[key]) return _tuneCache[key];
+  const [h, s, l0] = _rgb2hsl(..._hex2rgb(base));
+  const bg = dark ? CC_SURFACE.dark : CC_SURFACE.light;
+  let out;
+  if (dark) {
+    const l = Math.min(0.72, Math.max(0.52, l0));
+    out = {
+      c1:  _ensure(h, s, Math.min(0.86, l + 0.10), bg, 3, +1),
+      c2:  _ensure(h, s, l - 0.06, bg, 3, +1),
+      dot: _ensure(h, s, l, bg, 3, +1),
+      text: _ensure(h, s, Math.min(0.85, l + 0.12), bg, 4.5, +1),
+    };
+  } else {
+    const l = Math.min(0.56, Math.max(0.36, l0));
+    out = {
+      c1:  _ensure(h, s, Math.min(0.66, l + 0.10), bg, 2.4, -1),
+      c2:  _ensure(h, s, l - 0.08, bg, 3.2, -1),
+      dot: _ensure(h, s, l, bg, 3, -1),
+      text: _ensure(h, s, Math.min(l, 0.34), bg, 4.5, -1),
+    };
+  }
+  return (_tuneCache[key] = out);
+}
+
+const TODO_DEFAULTS = { delete: '#FF3B30', low: '#34C759', medium: '#FFD60A', high: '#FF9500' };
+const TODO_ACCENT_DEFAULT = '#007AFF';
+
+const COLOR_PRESETS = [
+  { id: 'classic',  name: 'Classic',  accent: '#007AFF', colors: null },
+  { id: 'ocean',    name: 'Ocean',    accent: '#0A84FF', colors: { delete: '#FF6482', low: '#30D5C8', medium: '#FFD60A', high: '#FF6482' } },
+  { id: 'berry',    name: 'Berry',    accent: '#BF5AF2', colors: { delete: '#FF375F', low: '#30D158', medium: '#FFD60A', high: '#FF9F0A' } },
+  { id: 'graphite', name: 'Graphite', accent: '#8FA3BF', colors: { delete: '#FF6B5E', low: '#8FB996', medium: '#E6C45A', high: '#E39A5C' } },
+];
+
+const CC_FONT = "ui-rounded,'SF Pro Rounded',-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif";
+
+// Saved caches and preferences used to live under a different storage prefix.
+// Copied across once so nothing set earlier is lost (safe to delete this after
+// a while).
+const LEGACY_PREFIX = 'tiger_';
+
+class CrowTodoCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -32,6 +141,8 @@ class TigerTodoCard extends HTMLElement {
     this._taskInfoCache = {};       // task text (lowercased) -> looked-up task info
     this._categoryPinByUid = {};    // item uid -> category, overrides the text lookup right after a rename
     this._taskCategoryPinByUid = {}; // same, for the Tasks list
+    this._themeMemo = null;         // cached theme tokens (see _theme)
+    this._lastThemeSig = null;
   }
 
   disconnectedCallback() {
@@ -49,6 +160,9 @@ class TigerTodoCard extends HTMLElement {
       entity: todoEntity || '',
       title: 'Shopping List',
       accent_color: '#007AFF',
+      appearance: 'auto',
+      card_style: 'classic',
+      glass: 50,
       show_add_bar: true,
       group_by_category: true,
       ai_features_enabled: false,
@@ -73,6 +187,9 @@ class TigerTodoCard extends HTMLElement {
     this._config = {
       title: 'Shopping List',
       accent_color: '#007AFF',
+      appearance: 'auto',
+      card_style: 'classic',
+      glass: 50,
       show_add_bar: true,
       group_by_category: true,
       ai_features_enabled: false,
@@ -91,6 +208,7 @@ class TigerTodoCard extends HTMLElement {
       persistent_storage: false,
       ...config
     };
+    this._migrateLegacyStorage();
     // The ⋮ menu's "Sort by Category" and "Show Tasks Section" toggles are
     // runtime overrides that otherwise always win over these editor
     // settings, so they survive a reload — but that means once either has
@@ -102,7 +220,7 @@ class TigerTodoCard extends HTMLElement {
     // rather than kept only on `this` — a genuine edit changes that stored
     // value; an unrelated reload of the same saved config does not.
     try {
-      const lastKey = 'tiger_last_config_' + this._config.entity;
+      const lastKey = 'crow_todo_last_config_' + this._config.entity;
       const lastRaw = localStorage.getItem(lastKey);
       const last = lastRaw ? JSON.parse(lastRaw) : null;
       if (last && last.group_by_category !== this._config.group_by_category) {
@@ -126,8 +244,12 @@ class TigerTodoCard extends HTMLElement {
   set hass(hass) {
     const firstRun = !this._hass;
     this._hass = hass;
+    const themeSig = this._themeSig();
+    const themeChanged = !firstRun && this._lastThemeSig !== null && themeSig !== this._lastThemeSig;
+    this._lastThemeSig = themeSig;
     const stateObj = hass.states[this._config.entity];
     if (!stateObj) { this._render(); return; }
+    if (themeChanged) this._render();
     const sig = stateObj.last_changed + stateObj.state;
     if (firstRun) {
       this._loadUserData();
@@ -154,6 +276,38 @@ class TigerTodoCard extends HTMLElement {
     }
   }
 
+  // One-time carry-over of saved caches and preferences from the previous
+  // storage names, so nothing set earlier is lost.
+  _migrateLegacyStorage() {
+    const ent = this._config?.entity, todo = this._config?.todo_entity;
+    try {
+      [[['last_config', 'categories', 'completion_log', 'food_info', 'dismissed_restock', 'sort_by_category', 'collapsed', 'compact_mode', 'show_tasks'], ent],
+       [['task_categories', 'task_info', 'tasks_only_view'], todo]].forEach(([keys, id]) => {
+        if (!id) return;
+        keys.forEach(k => {
+          const nk = 'crow_todo_' + k + '_' + id;
+          if (localStorage.getItem(nk) === null) {
+            const v = localStorage.getItem(LEGACY_PREFIX + k + '_' + id);
+            if (v !== null) localStorage.setItem(nk, v);
+          }
+        });
+      });
+    } catch (_) {}
+  }
+
+  async _migrateLegacyServer(conn) {
+    try { if (localStorage.getItem('crow_todo_server_migrated')) return; } catch (_) {}
+    for (const k of ['categories', 'completion_log', 'dismissed_restock', 'sort_by_category', 'show_tasks', 'task_categories', 'tasks_only_view', 'task_info', 'food_info']) {
+      try {
+        const cur = await conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_' + k });
+        if (cur?.value != null) continue;
+        const old = await conn.sendMessagePromise({ type: 'frontend/get_user_data', key: LEGACY_PREFIX + k });
+        if (old?.value != null) await conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_' + k, value: old.value });
+      } catch (_) {}
+    }
+    try { localStorage.setItem('crow_todo_server_migrated', '1'); } catch (_) {}
+  }
+
   // ── Data layer ──────────────────────────────────────────────────────
   async _fetchItems() {
     if (!this._hass) return;
@@ -168,7 +322,7 @@ class TigerTodoCard extends HTMLElement {
       }
       this._render();
     } catch (e) {
-      console.error('tiger-todo-card: failed to load items', e);
+      console.error('crow-todo-card: failed to load items', e);
       this._showToast("Couldn't load the list");
     }
   }
@@ -189,7 +343,7 @@ class TigerTodoCard extends HTMLElement {
       }
       this._render();
     } catch (e) {
-      console.error('tiger-todo-card: failed to load tasks', e);
+      console.error('crow-todo-card: failed to load tasks', e);
       this._showToast("Couldn't load the tasks list");
     }
   }
@@ -226,7 +380,7 @@ class TigerTodoCard extends HTMLElement {
         item: clean
       });
     } catch (e) {
-      console.error('tiger-todo-card: add_item failed', e);
+      console.error('crow-todo-card: add_item failed', e);
       if (isTask) this._taskItems = prevItems; else this._items = prevItems;
       this._render();
       this._showToast("Couldn't add that item");
@@ -253,7 +407,7 @@ class TigerTodoCard extends HTMLElement {
         status: newStatus
       });
     } catch (e) {
-      console.error('tiger-todo-card: update_item failed', e);
+      console.error('crow-todo-card: update_item failed', e);
       if (isTask) this._taskItems = prevItems; else this._items = prevItems;
       this._render();
       this._showToast("Couldn't update that item");
@@ -274,7 +428,7 @@ class TigerTodoCard extends HTMLElement {
         item: item.uid
       });
     } catch (e) {
-      console.error('tiger-todo-card: remove_item failed', e);
+      console.error('crow-todo-card: remove_item failed', e);
       if (isTask) this._taskItems = prevItems; else this._items = prevItems;
       this._render();
       this._showToast("Couldn't delete that item");
@@ -318,7 +472,7 @@ class TigerTodoCard extends HTMLElement {
         rename: newSummary
       });
     } catch (e) {
-      console.error('tiger-todo-card: rename failed', e);
+      console.error('crow-todo-card: rename failed', e);
       if (isTask) this._taskItems = prevItems; else this._items = prevItems;
       // Roll back the category bookkeeping too — a rename that didn't
       // actually go through shouldn't leave the item stuck under "Other".
@@ -400,7 +554,7 @@ class TigerTodoCard extends HTMLElement {
           await this._hass.callService('todo', 'remove_item', { entity_id: entityId, item: item.uid });
         }
       } catch (e2) {
-        console.error('tiger-todo-card: clear completed failed', e2);
+        console.error('crow-todo-card: clear completed failed', e2);
         if (isTask) this._taskItems = prevItems; else this._items = prevItems;
         this._render();
         this._showToast("Couldn't clear completed items");
@@ -411,8 +565,8 @@ class TigerTodoCard extends HTMLElement {
   // Crowai-style toast — catches service/WS failures ourselves instead of
   // letting Home Assistant's default (much more technical) error banner show.
   _showToast(message, duration = 3500) {
-    const toast = this.shadowRoot?.getElementById('tigerToast');
-    const textEl = this.shadowRoot?.getElementById('tigerToastText');
+    const toast = this.shadowRoot?.getElementById('crowToast');
+    const textEl = this.shadowRoot?.getElementById('crowToastText');
     if (!toast || !textEl) return;
     if (this._toastTimer) clearTimeout(this._toastTimer);
     textEl.textContent = message;
@@ -426,53 +580,53 @@ class TigerTodoCard extends HTMLElement {
   // ── Persistence (tier-1 localStorage, tier-2 frontend/set_user_data) ─
   async _loadUserData() {
     try {
-      const raw = localStorage.getItem('tiger_categories_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_categories_' + this._config.entity);
       if (raw) this._categoryCache = JSON.parse(raw);
     } catch (_) {}
     if (this._config.todo_entity) {
       try {
-        const raw = localStorage.getItem('tiger_task_categories_' + this._config.todo_entity);
+        const raw = localStorage.getItem('crow_todo_task_categories_' + this._config.todo_entity);
         if (raw) this._taskCategoryCache = JSON.parse(raw);
       } catch (_) {}
     }
     try {
-      const raw = localStorage.getItem('tiger_completion_log_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_completion_log_' + this._config.entity);
       if (raw) this._completionLog = JSON.parse(raw);
     } catch (_) {}
     try {
-      const raw = localStorage.getItem('tiger_food_info_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_food_info_' + this._config.entity);
       if (raw) this._foodInfoCache = JSON.parse(raw);
     } catch (_) {}
     if (this._config.todo_entity) {
       try {
-        const raw = localStorage.getItem('tiger_task_info_' + this._config.todo_entity);
+        const raw = localStorage.getItem('crow_todo_task_info_' + this._config.todo_entity);
         if (raw) this._taskInfoCache = JSON.parse(raw);
       } catch (_) {}
     }
     try {
-      const raw = localStorage.getItem('tiger_dismissed_restock_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_dismissed_restock_' + this._config.entity);
       if (raw) this._dismissedRestock = JSON.parse(raw);
     } catch (_) {}
     try {
-      const raw = localStorage.getItem('tiger_sort_by_category_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_sort_by_category_' + this._config.entity);
       if (raw !== null) this._sortByCategory = JSON.parse(raw);
     } catch (_) {}
     try {
-      const raw = localStorage.getItem('tiger_collapsed_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_collapsed_' + this._config.entity);
       if (raw !== null) this._collapsed = JSON.parse(raw);
     } catch (_) {}
     try {
-      const raw = localStorage.getItem('tiger_compact_mode_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_compact_mode_' + this._config.entity);
       if (raw !== null) this._compactMode = JSON.parse(raw);
     } catch (_) {}
     try {
-      const raw = localStorage.getItem('tiger_show_tasks_' + this._config.entity);
+      const raw = localStorage.getItem('crow_todo_show_tasks_' + this._config.entity);
       if (raw !== null) this._showTasks = JSON.parse(raw);
     } catch (_) {}
     let tasksOnlyLocallySet = false;
     if (this._config.todo_entity) {
       try {
-        const raw = localStorage.getItem('tiger_tasks_only_view_' + this._config.todo_entity);
+        const raw = localStorage.getItem('crow_todo_tasks_only_view_' + this._config.todo_entity);
         if (raw !== null) { this._tasksOnlyView = JSON.parse(raw); tasksOnlyLocallySet = true; }
       } catch (_) {}
     }
@@ -480,15 +634,16 @@ class TigerTodoCard extends HTMLElement {
     if (this._config.persistent_storage && this._hass) {
       try {
         const conn = this._hass.connection;
+        await this._migrateLegacyServer(conn);
         const [catRes, logRes, dismissRes, sortRes, tasksVisRes, taskCatRes, tasksOnlyRes, taskInfoRes] = await Promise.all([
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_categories' }),
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_completion_log' }),
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_dismissed_restock' }),
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_sort_by_category' }),
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_show_tasks' }),
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_task_categories' }),
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_tasks_only_view' }),
-          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_task_info' })
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_categories' }),
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_completion_log' }),
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_dismissed_restock' }),
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_sort_by_category' }),
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_show_tasks' }),
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_task_categories' }),
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_tasks_only_view' }),
+          conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_task_info' })
         ]);
         if (catRes?.value?.[this._config.entity]) {
           this._categoryCache = { ...catRes.value[this._config.entity], ...this._categoryCache };
@@ -523,15 +678,15 @@ class TigerTodoCard extends HTMLElement {
 
   _saveCategoryCache() {
     try {
-      localStorage.setItem('tiger_categories_' + this._config.entity, JSON.stringify(this._categoryCache));
+      localStorage.setItem('crow_todo_categories_' + this._config.entity, JSON.stringify(this._categoryCache));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_categories' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_categories' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.entity] = this._categoryCache;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_categories', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_categories', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -540,15 +695,15 @@ class TigerTodoCard extends HTMLElement {
   _saveTaskCategoryCache() {
     if (!this._config.todo_entity) return;
     try {
-      localStorage.setItem('tiger_task_categories_' + this._config.todo_entity, JSON.stringify(this._taskCategoryCache));
+      localStorage.setItem('crow_todo_task_categories_' + this._config.todo_entity, JSON.stringify(this._taskCategoryCache));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_task_categories' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_task_categories' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.todo_entity] = this._taskCategoryCache;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_task_categories', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_task_categories', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -556,15 +711,15 @@ class TigerTodoCard extends HTMLElement {
 
   _saveFoodInfoCache() {
     try {
-      localStorage.setItem('tiger_food_info_' + this._config.entity, JSON.stringify(this._foodInfoCache));
+      localStorage.setItem('crow_todo_food_info_' + this._config.entity, JSON.stringify(this._foodInfoCache));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_food_info' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_food_info' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.entity] = this._foodInfoCache;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_food_info', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_food_info', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -573,15 +728,15 @@ class TigerTodoCard extends HTMLElement {
   _saveTaskInfoCache() {
     if (!this._config.todo_entity) return;
     try {
-      localStorage.setItem('tiger_task_info_' + this._config.todo_entity, JSON.stringify(this._taskInfoCache));
+      localStorage.setItem('crow_todo_task_info_' + this._config.todo_entity, JSON.stringify(this._taskInfoCache));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_task_info' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_task_info' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.todo_entity] = this._taskInfoCache;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_task_info', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_task_info', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -589,15 +744,15 @@ class TigerTodoCard extends HTMLElement {
 
   _saveDismissedRestock() {
     try {
-      localStorage.setItem('tiger_dismissed_restock_' + this._config.entity, JSON.stringify(this._dismissedRestock));
+      localStorage.setItem('crow_todo_dismissed_restock_' + this._config.entity, JSON.stringify(this._dismissedRestock));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_dismissed_restock' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_dismissed_restock' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.entity] = this._dismissedRestock;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_dismissed_restock', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_dismissed_restock', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -605,15 +760,15 @@ class TigerTodoCard extends HTMLElement {
 
   _saveSortPreference() {
     try {
-      localStorage.setItem('tiger_sort_by_category_' + this._config.entity, JSON.stringify(this._sortByCategory));
+      localStorage.setItem('crow_todo_sort_by_category_' + this._config.entity, JSON.stringify(this._sortByCategory));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_sort_by_category' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_sort_by_category' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.entity] = this._sortByCategory;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_sort_by_category', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_sort_by_category', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -626,28 +781,28 @@ class TigerTodoCard extends HTMLElement {
   // result-array for.
   _saveCollapsedPreference() {
     try {
-      localStorage.setItem('tiger_collapsed_' + this._config.entity, JSON.stringify(this._collapsed));
+      localStorage.setItem('crow_todo_collapsed_' + this._config.entity, JSON.stringify(this._collapsed));
     } catch (_) {}
   }
 
   // Same local-storage-only scoping as collapsed state, same reasoning.
   _saveCompactModePreference() {
     try {
-      localStorage.setItem('tiger_compact_mode_' + this._config.entity, JSON.stringify(this._compactMode));
+      localStorage.setItem('crow_todo_compact_mode_' + this._config.entity, JSON.stringify(this._compactMode));
     } catch (_) {}
   }
 
   _saveTasksVisibilityPreference() {
     try {
-      localStorage.setItem('tiger_show_tasks_' + this._config.entity, JSON.stringify(this._showTasks));
+      localStorage.setItem('crow_todo_show_tasks_' + this._config.entity, JSON.stringify(this._showTasks));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_show_tasks' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_show_tasks' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.entity] = this._showTasks;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_show_tasks', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_show_tasks', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -656,15 +811,15 @@ class TigerTodoCard extends HTMLElement {
   _saveTasksOnlyViewPreference() {
     if (!this._config.todo_entity) return;
     try {
-      localStorage.setItem('tiger_tasks_only_view_' + this._config.todo_entity, JSON.stringify(this._tasksOnlyView));
+      localStorage.setItem('crow_todo_tasks_only_view_' + this._config.todo_entity, JSON.stringify(this._tasksOnlyView));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_tasks_only_view' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_tasks_only_view' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.todo_entity] = this._tasksOnlyView;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_tasks_only_view', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_tasks_only_view', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -676,15 +831,15 @@ class TigerTodoCard extends HTMLElement {
     log.push(Date.now());
     this._completionLog[key] = log.slice(-10);
     try {
-      localStorage.setItem('tiger_completion_log_' + this._config.entity, JSON.stringify(this._completionLog));
+      localStorage.setItem('crow_todo_completion_log_' + this._config.entity, JSON.stringify(this._completionLog));
     } catch (_) {}
     if (this._config.persistent_storage && this._hass) {
       const conn = this._hass.connection;
-      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'tiger_completion_log' })
+      conn.sendMessagePromise({ type: 'frontend/get_user_data', key: 'crow_todo_completion_log' })
         .then(res => {
           const full = res?.value || {};
           full[this._config.entity] = this._completionLog;
-          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'tiger_completion_log', value: full }).catch(() => {});
+          conn.sendMessagePromise({ type: 'frontend/set_user_data', key: 'crow_todo_completion_log', value: full }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -706,7 +861,7 @@ class TigerTodoCard extends HTMLElement {
       });
       return res?.response?.speech?.plain?.speech || null;
     } catch (e) {
-      console.error('tiger-todo-card: AI call failed', e);
+      console.error('crow-todo-card: AI call failed', e);
       return null;
     }
   }
@@ -795,7 +950,7 @@ class TigerTodoCard extends HTMLElement {
       this._saveFoodInfoCache();
       return result;
     } catch (e) {
-      console.error('tiger-todo-card: item info parse failed', e, reply);
+      console.error('crow-todo-card: item info parse failed', e, reply);
       return cached || null;
     }
   }
@@ -820,7 +975,7 @@ class TigerTodoCard extends HTMLElement {
       this._saveFoodInfoCache();
       return result;
     } catch (e) {
-      console.error('tiger-todo-card: serving suggestions parse failed', e, reply);
+      console.error('crow-todo-card: serving suggestions parse failed', e, reply);
       return null;
     }
   }
@@ -842,7 +997,7 @@ class TigerTodoCard extends HTMLElement {
       this._saveFoodInfoCache();
       return result;
     } catch (e) {
-      console.error('tiger-todo-card: cooking suggestions parse failed', e, reply);
+      console.error('crow-todo-card: cooking suggestions parse failed', e, reply);
       return null;
     }
   }
@@ -868,7 +1023,7 @@ class TigerTodoCard extends HTMLElement {
       this._saveTaskInfoCache();
       return result;
     } catch (e) {
-      console.error('tiger-todo-card: task info parse failed', e, reply);
+      console.error('crow-todo-card: task info parse failed', e, reply);
       return cached || null;
     }
   }
@@ -890,7 +1045,7 @@ class TigerTodoCard extends HTMLElement {
       this._saveTaskInfoCache();
       return result;
     } catch (e) {
-      console.error('tiger-todo-card: task tips parse failed', e, reply);
+      console.error('crow-todo-card: task tips parse failed', e, reply);
       return null;
     }
   }
@@ -912,7 +1067,7 @@ class TigerTodoCard extends HTMLElement {
       this._saveTaskInfoCache();
       return result;
     } catch (e) {
-      console.error('tiger-todo-card: related tasks parse failed', e, reply);
+      console.error('crow-todo-card: related tasks parse failed', e, reply);
       return null;
     }
   }
@@ -948,7 +1103,7 @@ class TigerTodoCard extends HTMLElement {
       this._thumbnailCache[key] = result;
       return result;
     } catch (e) {
-      console.error('tiger-todo-card: thumbnail fetch failed', e);
+      console.error('crow-todo-card: thumbnail fetch failed', e);
       this._thumbnailCache[key] = null;
       return null;
     }
@@ -982,15 +1137,15 @@ class TigerTodoCard extends HTMLElement {
 
   _showImageLightbox(imgSrc, caption) {
     if (!imgSrc) return;
-    document.getElementById('tiger-image-lightbox')?.remove();
+    document.getElementById('crow-image-lightbox')?.remove();
     const t = this._theme();
 
     const backdrop = document.createElement('div');
-    backdrop.id = 'tiger-image-lightbox';
+    backdrop.id = 'crow-image-lightbox';
     backdrop.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
 
     const card = document.createElement('div');
-    card.style.cssText = `background:${t.cardBg};border-radius:20px;padding:16px;display:flex;flex-direction:column;align-items:center;gap:12px;max-width:360px;width:100%;box-sizing:border-box;box-shadow:0 20px 60px rgba(0,0,0,${t.dark ? '0.6' : '0.25'});`;
+    card.style.cssText = `${t.popupLightbox}display:flex;flex-direction:column;align-items:center;gap:12px;max-width:360px;width:100%;box-sizing:border-box;`;
 
     const closeRow = document.createElement('div');
     closeRow.style.cssText = 'display:flex;justify-content:flex-end;width:100%;';
@@ -1054,23 +1209,23 @@ class TigerTodoCard extends HTMLElement {
   // Download button below it works regardless.
   _showPdfPreview(doc, filename) {
     this._closePdfPopup();
-    const accent = this._config.accent_color || '#007AFF';
+    const accent = this._theme().accentText;
     const blobUrl = doc.output('bloburl');
     const t = this._theme();
 
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:10040;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
+    overlay.style.cssText = `position:fixed;inset:0;z-index:10040;display:flex;align-items:center;justify-content:center;padding:16px;background:${this._theme().overlay};backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);`;
 
     const popup = document.createElement('div');
-    popup.style.cssText = `background:${t.dark ? 'rgba(24,24,28,0.96)' : 'rgba(255,255,255,0.97)'};border:1px solid ${this._ta(0.15)};border-radius:24px;box-shadow:0 24px 64px ${t.dark ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.18)'};padding:20px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:${t.text};box-sizing:border-box;`;
+    popup.style.cssText = `${t.popupPdf}width:100%;max-width:420px;max-height:90vh;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:${t.text};box-sizing:border-box;`;
     popup.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
 
     const headerRow = document.createElement('div');
     headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;';
     headerRow.innerHTML = `
       <span style="font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${this._ta(0.45)};">PDF Preview</span>
-      <button class="tiger-pdf-close" style="background:${this._ta(0.1)};border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:${this._ta(0.65)};font-size:15px;line-height:1;padding:0;flex-shrink:0;">✕</button>`;
-    headerRow.querySelector('.tiger-pdf-close').addEventListener('click', () => this._closePdfPopup());
+      <button class="crow-pdf-close" style="background:${this._ta(0.1)};border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:${this._ta(0.65)};font-size:15px;line-height:1;padding:0;flex-shrink:0;">✕</button>`;
+    headerRow.querySelector('.crow-pdf-close').addEventListener('click', () => this._closePdfPopup());
 
     // The frame itself stays a fixed white "page" regardless of theme —
     // that's genuinely what the PDF looks like, and a dark-mode-tinted
@@ -1123,7 +1278,7 @@ class TigerTodoCard extends HTMLElement {
     try {
       JsPDFCtor = await this._ensureJsPDF();
     } catch (e) {
-      console.error('tiger-todo-card: jsPDF load failed', e);
+      console.error('crow-todo-card: jsPDF load failed', e);
       this._showToast("Couldn't load the PDF library — check your connection");
       return;
     }
@@ -1134,7 +1289,7 @@ class TigerTodoCard extends HTMLElement {
     const pageWidth = doc.internal.pageSize.getWidth();
     let y = 56;
 
-    const accentRgb = this._hexToRgb(this._config.accent_color || '#007AFF');
+    const accentRgb = this._hexToRgb(this._theme().accentText);
     const setAccent = () => doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
     const setInk = () => doc.setTextColor(20, 20, 20);
     const setMuted = () => doc.setTextColor(130, 130, 130);
@@ -1211,7 +1366,7 @@ class TigerTodoCard extends HTMLElement {
     try {
       JsPDFCtor = await this._ensureJsPDF();
     } catch (e) {
-      console.error('tiger-todo-card: jsPDF load failed', e);
+      console.error('crow-todo-card: jsPDF load failed', e);
       this._showToast("Couldn't load the PDF library — check your connection");
       return;
     }
@@ -1228,7 +1383,7 @@ class TigerTodoCard extends HTMLElement {
     const pageWidth = doc.internal.pageSize.getWidth();
     let y = 56;
 
-    const accentRgb = this._hexToRgb(this._config.accent_color || '#007AFF');
+    const accentRgb = this._hexToRgb(this._theme().accentText);
     const setAccent = () => doc.setTextColor(accentRgb.r, accentRgb.g, accentRgb.b);
     const setInk = () => doc.setTextColor(20, 20, 20);
     const setMuted = () => doc.setTextColor(130, 130, 130);
@@ -1308,30 +1463,30 @@ class TigerTodoCard extends HTMLElement {
   // Completed, etc.) instead of a native confirm(), which looks out of
   // place inside a themed card.
   _showConfirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', destructive = true, onConfirm, onCancel }) {
-    document.getElementById('tiger-confirm-dialog')?.remove();
+    document.getElementById('crow-confirm-dialog')?.remove();
     const t = this._theme();
 
     const overlay = document.createElement('div');
-    overlay.id = 'tiger-confirm-dialog';
+    overlay.id = 'crow-confirm-dialog';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10060;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,0.35);';
 
     const style = document.createElement('style');
     style.textContent = `
-      @keyframes tigerConfirmFadeIn  { from{opacity:0} to{opacity:1} }
-      @keyframes tigerConfirmSlideUp { from{transform:translateY(12px) scale(0.96);opacity:0} to{transform:none;opacity:1} }
+      @keyframes crowConfirmFadeIn  { from{opacity:0} to{opacity:1} }
+      @keyframes crowConfirmSlideUp { from{transform:translateY(12px) scale(0.96);opacity:0} to{transform:none;opacity:1} }
     `;
-    overlay.style.animation = 'tigerConfirmFadeIn 0.15s ease';
+    overlay.style.animation = 'crowConfirmFadeIn 0.15s ease';
 
     const card = document.createElement('div');
-    card.style.cssText = `width:100%;max-width:270px;background:${t.confirmBg};backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);border-radius:14px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,0.35);border:1px solid ${t.confirmBorder};font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;animation:tigerConfirmSlideUp 0.2s cubic-bezier(0.34,1.3,0.64,1);`;
+    card.style.cssText = `width:100%;max-width:${t.confirmMax};background:${t.confirmBg};backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);border-radius:${t.confirmRadius};overflow:hidden;box-shadow:${t.confirmShadow};border:1px solid ${t.confirmBorder};font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;animation:crowConfirmSlideUp 0.2s cubic-bezier(0.34,1.3,0.64,1);`;
     card.innerHTML = `
       <div style="padding:18px 18px 16px;text-align:center;">
         <div style="font-size:15px;font-weight:600;color:${t.confirmTitle};margin-bottom:4px;">${this._escape(title)}</div>
         ${message ? `<div style="font-size:12.5px;color:${t.confirmMsg};line-height:1.4;">${this._escape(message)}</div>` : ''}
       </div>
       <div style="display:flex;border-top:1px solid ${t.confirmDivider};">
-        <button id="tiger-confirm-cancel" style="flex:1;padding:12px;background:none;border:none;border-right:1px solid ${t.confirmCancelBorder};color:${this._config.accent_color || '#007AFF'};font-size:14.5px;font-weight:500;cursor:pointer;font-family:inherit;">${this._escape(cancelLabel)}</button>
-        <button id="tiger-confirm-ok" style="flex:1;padding:12px;background:none;border:none;color:${destructive ? '#FF3B30' : (this._config.accent_color || '#007AFF')};font-size:14.5px;font-weight:700;cursor:pointer;font-family:inherit;">${this._escape(confirmLabel)}</button>
+        <button id="crow-confirm-cancel" style="flex:1;padding:12px;background:none;border:none;border-right:1px solid ${t.confirmCancelBorder};color:${this._theme().accentText};font-size:14.5px;font-weight:500;cursor:pointer;font-family:inherit;">${this._escape(cancelLabel)}</button>
+        <button id="crow-confirm-ok" style="flex:1;padding:12px;background:none;border:none;color:${destructive ? this._palette('delete').text : (this._theme().accentText)};font-size:14.5px;font-weight:700;cursor:pointer;font-family:inherit;">${this._escape(confirmLabel)}</button>
       </div>`;
 
     overlay.appendChild(style);
@@ -1341,8 +1496,8 @@ class TigerTodoCard extends HTMLElement {
       overlay.style.opacity = '0';
       setTimeout(() => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 150);
     };
-    card.querySelector('#tiger-confirm-cancel').addEventListener('click', () => { close(); onCancel?.(); });
-    card.querySelector('#tiger-confirm-ok').addEventListener('click', () => { close(); onConfirm?.(); });
+    card.querySelector('#crow-confirm-cancel').addEventListener('click', () => { close(); onCancel?.(); });
+    card.querySelector('#crow-confirm-ok').addEventListener('click', () => { close(); onConfirm?.(); });
     overlay.addEventListener('click', e => { if (e.target === overlay) { close(); onCancel?.(); } });
     document.body.appendChild(overlay);
   }
@@ -1352,7 +1507,7 @@ class TigerTodoCard extends HTMLElement {
       this._foodPopupOverlay.remove();
       this._foodPopupOverlay = null;
     }
-    document.getElementById('tiger-image-lightbox')?.remove();
+    document.getElementById('crow-image-lightbox')?.remove();
   }
 
   // Long-pressing any row opens this — appended to document.body (outside
@@ -1360,36 +1515,36 @@ class TigerTodoCard extends HTMLElement {
   // event-trapping layers.
   async _openFoodPopup(name) {
     this._closeFoodPopup();
-    const accent = this._config.accent_color || '#007AFF';
+    const accent = this._theme().accentText;
 
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
+    overlay.style.cssText = `position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;background:${this._theme().overlay};backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);`;
 
     const style = document.createElement('style');
     style.textContent = `
-      @keyframes tigerFadeIn  { from{opacity:0} to{opacity:1} }
-      @keyframes tigerSlideUp { from{transform:translateY(18px) scale(0.97);opacity:0} to{transform:none;opacity:1} }
-      @keyframes tigerSpin { to { transform: rotate(360deg); } }
-      .tiger-food-popup { animation: tigerSlideUp 0.26s cubic-bezier(0.34,1.3,0.64,1); }
-      .tiger-food-overlay { animation: tigerFadeIn 0.2s ease; }
-      .tiger-food-close:hover { background: ${this._ta(0.22)} !important; }
+      @keyframes crowFadeIn  { from{opacity:0} to{opacity:1} }
+      @keyframes crowSlideUp { from{transform:translateY(18px) scale(0.97);opacity:0} to{transform:none;opacity:1} }
+      @keyframes crowSpin { to { transform: rotate(360deg); } }
+      .crow-food-popup { animation: crowSlideUp 0.26s cubic-bezier(0.34,1.3,0.64,1); }
+      .crow-food-overlay { animation: crowFadeIn 0.2s ease; }
+      .crow-food-close:hover { background: ${this._ta(0.22)} !important; }
     `;
 
     const popup = document.createElement('div');
-    popup.className = 'tiger-food-popup';
-    popup.style.cssText = `background:${this._theme().dark ? 'rgba(24,24,28,0.92)' : 'rgba(255,255,255,0.96)'};backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border:1px solid ${this._ta(0.15)};border-radius:24px;box-shadow:0 24px 64px ${this._theme().dark ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.18)'};padding:20px;width:100%;max-width:400px;max-height:88vh;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:${this._theme().text};box-sizing:border-box;`;
+    popup.className = 'crow-food-popup';
+    popup.style.cssText = `${this._theme().popupFood}width:100%;max-width:400px;max-height:88vh;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:${this._theme().text};box-sizing:border-box;`;
     popup.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
 
     const headerRow = document.createElement('div');
     headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;';
     headerRow.innerHTML = `
       <span style="font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${this._ta(0.45)};">Item Info</span>
-      <button class="tiger-food-close" style="background:${this._ta(0.1)};border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:${this._ta(0.65)};font-size:15px;line-height:1;padding:0;transition:background 0.15s;flex-shrink:0;">✕</button>`;
-    headerRow.querySelector('.tiger-food-close').addEventListener('click', () => this._closeFoodPopup());
+      <button class="crow-food-close" style="background:${this._ta(0.1)};border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:${this._ta(0.65)};font-size:15px;line-height:1;padding:0;transition:background 0.15s;flex-shrink:0;">✕</button>`;
+    headerRow.querySelector('.crow-food-close').addEventListener('click', () => this._closeFoodPopup());
 
     const body = document.createElement('div');
     body.innerHTML = `<div style="display:flex;align-items:center;gap:10px;padding:20px 0;color:${this._ta(0.6)};font-size:13px;">
-      <span style="width:16px;height:16px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.85)};border-radius:50%;display:inline-block;animation:tigerSpin 0.75s linear infinite;"></span>
+      <span style="width:16px;height:16px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.85)};border-radius:50%;display:inline-block;animation:crowSpin 0.75s linear infinite;"></span>
       Looking up "${this._escape(name)}"…
     </div>`;
 
@@ -1459,7 +1614,7 @@ class TigerTodoCard extends HTMLElement {
         <div style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;padding:14px 16px;margin-bottom:10px;">
           <div style="display:flex;gap:12px;margin-bottom:6px;">
             ${thumb
-              ? `<img class="tiger-thumb-open" data-full="${this._escape(thumbFull)}" data-caption="${this._escape(result.name || name)}" src="${thumb}" alt="" style="width:56px;height:56px;border-radius:12px;object-fit:cover;flex-shrink:0;background:${this._ta(0.06)};border:1px solid ${this._ta(0.1)};cursor:pointer;" />`
+              ? `<img class="crow-thumb-open" data-full="${this._escape(thumbFull)}" data-caption="${this._escape(result.name || name)}" src="${thumb}" alt="" style="width:56px;height:56px;border-radius:12px;object-fit:cover;flex-shrink:0;background:${this._ta(0.06)};border:1px solid ${this._ta(0.1)};cursor:pointer;" />`
               : `<div style="width:56px;height:56px;border-radius:12px;background:${this._ta(0.06)};border:1px solid ${this._ta(0.1)};display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;">${this._categoryEmoji(result.category)}</div>`}
             <div style="flex:1;min-width:0;">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
@@ -1469,7 +1624,7 @@ class TigerTodoCard extends HTMLElement {
               ${activeData.typical_serving ? `<div style="font-size:12px;color:${this._ta(0.55)};margin-top:4px;">Serving size: ${this._escape(activeData.typical_serving)}</div>` : ''}
             </div>
           </div>
-          ${canToggle ? `<button class="tiger-food-mode-toggle" style="width:100%;text-align:left;background:${accent}14;border:1px solid ${accent}40;border-radius:10px;padding:7px 10px;margin:2px 0 8px;font-size:11px;font-weight:600;color:${accent};cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;-webkit-tap-highlight-color:transparent;">
+          ${canToggle ? `<button class="crow-food-mode-toggle" style="width:100%;text-align:left;background:${accent}14;border:1px solid ${accent}40;border-radius:10px;padding:7px 10px;margin:2px 0 8px;font-size:11px;font-weight:600;color:${accent};cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;-webkit-tap-highlight-color:transparent;">
             <span>${mode === 'brand' ? '🏷️' : '📋'} ${toggleLabel}</span>
             <span style="opacity:0.6;">↺</span>
           </button>` : ''}
@@ -1505,40 +1660,40 @@ class TigerTodoCard extends HTMLElement {
         </div>
 
         ${isFood ? `
-        <div class="tiger-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
-          <div class="tiger-expand-header" data-kind="serving" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
+        <div class="crow-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
+          <div class="crow-expand-header" data-kind="serving" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
             <span style="font-size:13px;font-weight:600;">🍽️ Serving Suggestions</span>
-            <svg class="tiger-expand-chevron" data-kind="serving" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+            <svg class="crow-expand-chevron" data-kind="serving" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
           </div>
-          <div class="tiger-expand-body" data-kind="serving" style="display:none;padding:0 14px 14px;"></div>
+          <div class="crow-expand-body" data-kind="serving" style="display:none;padding:0 14px 14px;"></div>
         </div>
-        <div class="tiger-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
-          <div class="tiger-expand-header" data-kind="cooking" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
+        <div class="crow-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
+          <div class="crow-expand-header" data-kind="cooking" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
             <span style="font-size:13px;font-weight:600;">👨‍🍳 Cooking Suggestions</span>
-            <svg class="tiger-expand-chevron" data-kind="cooking" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+            <svg class="crow-expand-chevron" data-kind="cooking" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
           </div>
-          <div class="tiger-expand-body" data-kind="cooking" style="display:none;padding:0 14px 14px;"></div>
+          <div class="crow-expand-body" data-kind="cooking" style="display:none;padding:0 14px 14px;"></div>
         </div>
         ` : ''}
 
         <div style="font-size:10.5px;color:${this._ta(0.3)};line-height:1.5;padding:0 2px;">${this._escape(footerNote)}</div>
       `;
 
-      const thumbEl = body.querySelector('.tiger-thumb-open');
+      const thumbEl = body.querySelector('.crow-thumb-open');
       if (thumbEl) thumbEl.addEventListener('click', () => this._showImageLightbox(thumbEl.dataset.full, thumbEl.dataset.caption));
 
-      const toggleEl = body.querySelector('.tiger-food-mode-toggle');
+      const toggleEl = body.querySelector('.crow-food-mode-toggle');
       if (toggleEl) toggleEl.addEventListener('click', () => {
         currentMode = currentMode === 'brand' ? 'generic' : 'brand';
         renderBody(currentMode);
       });
 
       if (isFood) {
-        body.querySelectorAll('.tiger-expand-header').forEach(header => {
+        body.querySelectorAll('.crow-expand-header').forEach(header => {
           header.addEventListener('click', async () => {
             const kind = header.dataset.kind;
-            const chevron = body.querySelector(`.tiger-expand-chevron[data-kind="${kind}"]`);
-            const panel = body.querySelector(`.tiger-expand-body[data-kind="${kind}"]`);
+            const chevron = body.querySelector(`.crow-expand-chevron[data-kind="${kind}"]`);
+            const panel = body.querySelector(`.crow-expand-body[data-kind="${kind}"]`);
             const isOpen = panel.style.display !== 'none';
             if (isOpen) {
               panel.style.display = 'none';
@@ -1550,7 +1705,7 @@ class TigerTodoCard extends HTMLElement {
             if (panel.dataset.loaded === '1') return; // already fetched this popup session
 
             panel.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:${this._ta(0.5)};padding:2px 0 10px;">
-              <span style="width:14px;height:14px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.8)};border-radius:50%;display:inline-block;animation:tigerSpin 0.7s linear infinite;"></span>
+              <span style="width:14px;height:14px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.8)};border-radius:50%;display:inline-block;animation:crowSpin 0.7s linear infinite;"></span>
               Thinking…
             </div>`;
 
@@ -1579,36 +1734,36 @@ class TigerTodoCard extends HTMLElement {
   // one of these popups is ever open at a time.
   async _openTaskInfoPopup(name) {
     this._closeFoodPopup();
-    const accent = this._config.accent_color || '#007AFF';
+    const accent = this._theme().accentText;
 
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
+    overlay.style.cssText = `position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;background:${this._theme().overlay};backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);`;
 
     const style = document.createElement('style');
     style.textContent = `
-      @keyframes tigerFadeIn  { from{opacity:0} to{opacity:1} }
-      @keyframes tigerSlideUp { from{transform:translateY(18px) scale(0.97);opacity:0} to{transform:none;opacity:1} }
-      @keyframes tigerSpin { to { transform: rotate(360deg); } }
-      .tiger-food-popup { animation: tigerSlideUp 0.26s cubic-bezier(0.34,1.3,0.64,1); }
-      .tiger-food-overlay { animation: tigerFadeIn 0.2s ease; }
-      .tiger-food-close:hover { background: ${this._ta(0.22)} !important; }
+      @keyframes crowFadeIn  { from{opacity:0} to{opacity:1} }
+      @keyframes crowSlideUp { from{transform:translateY(18px) scale(0.97);opacity:0} to{transform:none;opacity:1} }
+      @keyframes crowSpin { to { transform: rotate(360deg); } }
+      .crow-food-popup { animation: crowSlideUp 0.26s cubic-bezier(0.34,1.3,0.64,1); }
+      .crow-food-overlay { animation: crowFadeIn 0.2s ease; }
+      .crow-food-close:hover { background: ${this._ta(0.22)} !important; }
     `;
 
     const popup = document.createElement('div');
-    popup.className = 'tiger-food-popup';
-    popup.style.cssText = `background:${this._theme().dark ? 'rgba(24,24,28,0.92)' : 'rgba(255,255,255,0.96)'};backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border:1px solid ${this._ta(0.15)};border-radius:24px;box-shadow:0 24px 64px ${this._theme().dark ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.18)'};padding:20px;width:100%;max-width:400px;max-height:88vh;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:${this._theme().text};box-sizing:border-box;`;
+    popup.className = 'crow-food-popup';
+    popup.style.cssText = `${this._theme().popupFood}width:100%;max-width:400px;max-height:88vh;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:${this._theme().text};box-sizing:border-box;`;
     popup.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
 
     const headerRow = document.createElement('div');
     headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;';
     headerRow.innerHTML = `
       <span style="font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${this._ta(0.45)};">Task Info</span>
-      <button class="tiger-food-close" style="background:${this._ta(0.1)};border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:${this._ta(0.65)};font-size:15px;line-height:1;padding:0;transition:background 0.15s;flex-shrink:0;">✕</button>`;
-    headerRow.querySelector('.tiger-food-close').addEventListener('click', () => this._closeFoodPopup());
+      <button class="crow-food-close" style="background:${this._ta(0.1)};border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:${this._ta(0.65)};font-size:15px;line-height:1;padding:0;transition:background 0.15s;flex-shrink:0;">✕</button>`;
+    headerRow.querySelector('.crow-food-close').addEventListener('click', () => this._closeFoodPopup());
 
     const body = document.createElement('div');
     body.innerHTML = `<div style="display:flex;align-items:center;gap:10px;padding:20px 0;color:${this._ta(0.6)};font-size:13px;">
-      <span style="width:16px;height:16px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.85)};border-radius:50%;display:inline-block;animation:tigerSpin 0.75s linear infinite;"></span>
+      <span style="width:16px;height:16px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.85)};border-radius:50%;display:inline-block;animation:crowSpin 0.75s linear infinite;"></span>
       Looking up "${this._escape(name)}"…
     </div>`;
 
@@ -1662,29 +1817,29 @@ class TigerTodoCard extends HTMLElement {
         ${result.note ? `<div style="font-size:11px;color:${this._ta(0.35)};line-height:1.4;padding-top:6px;border-top:1px solid ${this._ta(0.07)};">${this._escape(result.note)}</div>` : ''}
       </div>
 
-      <div class="tiger-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
-        <div class="tiger-expand-header" data-kind="tips" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
+      <div class="crow-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
+        <div class="crow-expand-header" data-kind="tips" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
           <span style="font-size:13px;font-weight:600;">💡 How-To Tips</span>
-          <svg class="tiger-expand-chevron" data-kind="tips" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+          <svg class="crow-expand-chevron" data-kind="tips" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
         </div>
-        <div class="tiger-expand-body" data-kind="tips" style="display:none;padding:0 14px 14px;"></div>
+        <div class="crow-expand-body" data-kind="tips" style="display:none;padding:0 14px 14px;"></div>
       </div>
-      <div class="tiger-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
-        <div class="tiger-expand-header" data-kind="related" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
+      <div class="crow-expand-card" style="background:${this._ta(0.05)};border:1px solid ${this._ta(0.1)};border-radius:16px;margin-bottom:8px;overflow:hidden;">
+        <div class="crow-expand-header" data-kind="related" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;-webkit-tap-highlight-color:transparent;">
           <span style="font-size:13px;font-weight:600;">🔗 Related Tasks</span>
-          <svg class="tiger-expand-chevron" data-kind="related" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+          <svg class="crow-expand-chevron" data-kind="related" viewBox="0 0 24 24" style="width:16px;height:16px;fill:${this._ta(0.4)};transition:transform 0.2s ease;flex-shrink:0;"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
         </div>
-        <div class="tiger-expand-body" data-kind="related" style="display:none;padding:0 14px 14px;"></div>
+        <div class="crow-expand-body" data-kind="related" style="display:none;padding:0 14px 14px;"></div>
       </div>
 
       <div style="font-size:10.5px;color:${this._ta(0.3)};line-height:1.5;padding:0 2px;">AI-generated general estimate — actual time and steps will vary.</div>
     `;
 
-    body.querySelectorAll('.tiger-expand-header').forEach(header => {
+    body.querySelectorAll('.crow-expand-header').forEach(header => {
       header.addEventListener('click', async () => {
         const kind = header.dataset.kind;
-        const chevron = body.querySelector(`.tiger-expand-chevron[data-kind="${kind}"]`);
-        const panel = body.querySelector(`.tiger-expand-body[data-kind="${kind}"]`);
+        const chevron = body.querySelector(`.crow-expand-chevron[data-kind="${kind}"]`);
+        const panel = body.querySelector(`.crow-expand-body[data-kind="${kind}"]`);
         const isOpen = panel.style.display !== 'none';
         if (isOpen) {
           panel.style.display = 'none';
@@ -1696,7 +1851,7 @@ class TigerTodoCard extends HTMLElement {
         if (panel.dataset.loaded === '1') return; // already fetched this popup session
 
         panel.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:${this._ta(0.5)};padding:2px 0 10px;">
-          <span style="width:14px;height:14px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.8)};border-radius:50%;display:inline-block;animation:tigerSpin 0.7s linear infinite;"></span>
+          <span style="width:14px;height:14px;border:2px solid ${this._ta(0.2)};border-top-color:${this._ta(0.8)};border-radius:50%;display:inline-block;animation:crowSpin 0.7s linear infinite;"></span>
           Thinking…
         </div>`;
 
@@ -1806,7 +1961,7 @@ class TigerTodoCard extends HTMLElement {
     // scroll container — not window/document, see _findScrollableAncestor.
     const pageScroller = this._findScrollableAncestor();
     const pageScrollTop = pageScroller ? pageScroller.scrollTop : 0;
-    const accent = this._config.accent_color || '#007AFF';
+    const accent = this._theme().accentText;
     const t = this._theme();
     const stateObj = this._hass?.states?.[this._config.entity];
     const active = this._items.filter(i => i.status !== 'completed');
@@ -1833,38 +1988,38 @@ class TigerTodoCard extends HTMLElement {
       <ha-card>
         <div class="header">
           <div class="title-row">
-            <span class="title" id="tigerTitleToggle" style="cursor:pointer;">${this._escape(tasksOnly ? tasksOnlyTitle : this._config.title)}</span>
+            <span class="title" id="crowTitleToggle" style="cursor:pointer;">${this._escape(tasksOnly ? tasksOnlyTitle : this._config.title)}</span>
             <div class="header-right">
               ${!collapsed ? `
               <div class="menu-wrap">
-                <button class="icon-btn menu-btn" id="tigerMenuBtn" title="More">${this._dotsIcon()}</button>
-                <div class="menu-dropdown" id="tigerMenuDropdown" style="display:${this._menuOpen ? 'block' : 'none'};">
+                <button class="icon-btn menu-btn" id="crowMenuBtn" title="More">${this._dotsIcon()}</button>
+                <div class="menu-dropdown" id="crowMenuDropdown" style="display:${this._menuOpen ? 'block' : 'none'};">
                   <div class="menu-section-label">View</div>
                   <div class="menu-item menu-toggle-item">
                     <span>Sort by Category</span>
-                    <label class="toggle-switch small"><input type="checkbox" id="tigerMenuSortToggle" ${this._effectiveSortByCategory() ? 'checked' : ''}><span class="toggle-track"></span></label>
+                    <label class="toggle-switch small"><input type="checkbox" id="crowMenuSortToggle" ${this._effectiveSortByCategory() ? 'checked' : ''}><span class="toggle-track"></span></label>
                   </div>
                   ${hasTaskList ? `
                   <div class="menu-item menu-toggle-item">
                     <span>Show Tasks Section</span>
-                    <label class="toggle-switch small"><input type="checkbox" id="tigerMenuTasksToggle" ${tasksVisible ? 'checked' : ''}><span class="toggle-track"></span></label>
+                    <label class="toggle-switch small"><input type="checkbox" id="crowMenuTasksToggle" ${tasksVisible ? 'checked' : ''}><span class="toggle-track"></span></label>
                   </div>` : ''}
                   ${hasTaskList && this._aiEnabled() ? `
                   <div class="menu-item menu-toggle-item">
                     <span>Tasks Only View</span>
-                    <label class="toggle-switch small"><input type="checkbox" id="tigerMenuTasksOnlyToggle" ${tasksOnly ? 'checked' : ''}><span class="toggle-track"></span></label>
+                    <label class="toggle-switch small"><input type="checkbox" id="crowMenuTasksOnlyToggle" ${tasksOnly ? 'checked' : ''}><span class="toggle-track"></span></label>
                   </div>` : ''}
                   <div class="menu-item menu-toggle-item">
                     <span>Compact Mode</span>
-                    <label class="toggle-switch small"><input type="checkbox" id="tigerMenuCompactToggle" ${compact ? 'checked' : ''}><span class="toggle-track"></span></label>
+                    <label class="toggle-switch small"><input type="checkbox" id="crowMenuCompactToggle" ${compact ? 'checked' : ''}><span class="toggle-track"></span></label>
                   </div>
                   <div class="menu-section-label menu-section-divider">Export</div>
-                  <button class="menu-item" id="tigerMenuExportPdf">${this._pdfIcon()} <span>Shopping List</span></button>
-                  ${hasTaskList ? `<button class="menu-item" id="tigerMenuExportTasksPdf">${this._pdfIcon()} <span>Tasks</span></button>` : ''}
+                  <button class="menu-item" id="crowMenuExportPdf">${this._pdfIcon()} <span>Shopping List</span></button>
+                  ${hasTaskList ? `<button class="menu-item" id="crowMenuExportTasksPdf">${this._pdfIcon()} <span>Tasks</span></button>` : ''}
                 </div>
               </div>
               ` : ''}
-              <button class="icon-btn" id="tigerCollapseBtn" title="${collapsed ? 'Expand' : 'Collapse'}" style="width:auto;height:auto;padding:0;margin-right:-2px;">
+              <button class="icon-btn" id="crowCollapseBtn" title="${collapsed ? 'Expand' : 'Collapse'}">
                 <ha-icon icon="mdi:chevron-down" style="--mdc-icon-size:18px;color:${t.iconBtnColor};transform:${collapsed ? 'rotate(-90deg)' : 'none'};transition:transform 0.2s ease;"></ha-icon>
               </button>
             </div>
@@ -1975,9 +2130,9 @@ class TigerTodoCard extends HTMLElement {
         `}
         ` : ''}
 
-        <div class="tiger-toast" id="tigerToast">
-          <div class="tiger-toast-icon"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg></div>
-          <div class="tiger-toast-text" id="tigerToastText"></div>
+        <div class="crow-toast" id="crowToast">
+          <div class="crow-toast-icon"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg></div>
+          <div class="crow-toast-text" id="crowToastText"></div>
         </div>
       </ha-card>
     `;
@@ -2074,14 +2229,14 @@ class TigerTodoCard extends HTMLElement {
       this._saveCollapsedPreference();
       this._render();
     };
-    const collapseBtn = root.getElementById('tigerCollapseBtn');
+    const collapseBtn = root.getElementById('crowCollapseBtn');
     if (collapseBtn) collapseBtn.addEventListener('click', toggleCollapsed);
-    const titleToggle = root.getElementById('tigerTitleToggle');
+    const titleToggle = root.getElementById('crowTitleToggle');
     if (titleToggle) titleToggle.addEventListener('click', toggleCollapsed);
 
     // ── ⋮ menu: Export to PDF, Sort by Category toggle ──────────────────
-    const menuBtn = root.getElementById('tigerMenuBtn');
-    const menuDropdown = root.getElementById('tigerMenuDropdown');
+    const menuBtn = root.getElementById('crowMenuBtn');
+    const menuDropdown = root.getElementById('crowMenuDropdown');
     if (menuBtn && menuDropdown) {
       menuBtn.addEventListener('click', e => {
         e.stopPropagation();
@@ -2089,38 +2244,38 @@ class TigerTodoCard extends HTMLElement {
         menuDropdown.style.display = this._menuOpen ? 'block' : 'none';
       });
     }
-    const exportPdfBtn = root.getElementById('tigerMenuExportPdf');
+    const exportPdfBtn = root.getElementById('crowMenuExportPdf');
     if (exportPdfBtn) exportPdfBtn.addEventListener('click', () => {
       this._menuOpen = false;
       if (menuDropdown) menuDropdown.style.display = 'none';
       this._exportShoppingListPdf();
     });
-    const exportTasksPdfBtn = root.getElementById('tigerMenuExportTasksPdf');
+    const exportTasksPdfBtn = root.getElementById('crowMenuExportTasksPdf');
     if (exportTasksPdfBtn) exportTasksPdfBtn.addEventListener('click', () => {
       this._menuOpen = false;
       if (menuDropdown) menuDropdown.style.display = 'none';
       this._exportTasksPdf();
     });
-    const sortToggle = root.getElementById('tigerMenuSortToggle');
+    const sortToggle = root.getElementById('crowMenuSortToggle');
     if (sortToggle) sortToggle.addEventListener('change', e => {
       this._sortByCategory = e.target.checked;
       this._saveSortPreference();
       this._render();
     });
-    const tasksToggle = root.getElementById('tigerMenuTasksToggle');
+    const tasksToggle = root.getElementById('crowMenuTasksToggle');
     if (tasksToggle) tasksToggle.addEventListener('change', e => {
       this._showTasks = e.target.checked;
       this._saveTasksVisibilityPreference();
       this._render();
     });
-    const tasksOnlyToggle = root.getElementById('tigerMenuTasksOnlyToggle');
+    const tasksOnlyToggle = root.getElementById('crowMenuTasksOnlyToggle');
     if (tasksOnlyToggle) tasksOnlyToggle.addEventListener('change', e => {
       this._tasksOnlyView = e.target.checked;
       this._saveTasksOnlyViewPreference();
       if (this._tasksOnlyView) this._categorizeMissingTasks();
       this._render();
     });
-    const compactToggle = root.getElementById('tigerMenuCompactToggle');
+    const compactToggle = root.getElementById('crowMenuCompactToggle');
     if (compactToggle) compactToggle.addEventListener('change', e => {
       this._compactMode = e.target.checked;
       this._saveCompactModePreference();
@@ -2196,7 +2351,7 @@ class TigerTodoCard extends HTMLElement {
       const menuWrap = root.querySelector('.menu-wrap');
       if (this._menuOpen && menuWrap && !menuWrap.contains(e.target)) {
         this._menuOpen = false;
-        const dropdown = root.getElementById('tigerMenuDropdown');
+        const dropdown = root.getElementById('crowMenuDropdown');
         if (dropdown) dropdown.style.display = 'none';
       }
     });
@@ -2303,7 +2458,7 @@ class TigerTodoCard extends HTMLElement {
       try {
         await this._hass.callService('todo', 'add_item', { entity_id: this._config.entity, item: text });
       } catch (e) {
-        console.error('tiger-todo-card: add_item failed', e);
+        console.error('crow-todo-card: add_item failed', e);
         this._showToast("Couldn't add that item");
       }
     });
@@ -2347,6 +2502,7 @@ class TigerTodoCard extends HTMLElement {
           longPressFired = true;
           dragging = false;
           content.style.transform = 'translateX(0)';
+          row.classList.remove('swiping');
           row.dataset.longpress = '1'; // consumed by the click handler that follows
           const item = (isTaskRow ? this._taskItems : this._items).find(i => i.uid === uid);
           if (!item) return;
@@ -2370,12 +2526,13 @@ class TigerTodoCard extends HTMLElement {
       if (axisLock === 'y') return; // committed to a vertical scroll — don't reveal delete
 
       currentX = dx;
-      if (currentX < 0) content.style.transform = `translateX(${Math.max(currentX, -84)}px)`;
+      if (currentX < 0) { content.style.transform = `translateX(${Math.max(currentX, -84)}px)`; row.classList.add('swiping'); }
     };
 
     const endPress = () => {
       clearLongPress();
       dragging = false;
+      row.classList.remove('swiping');
       if (longPressFired) { longPressFired = false; currentX = 0; axisLock = null; return; }
       const openNow = axisLock === 'x' && currentX < -40;
       content.style.transform = openNow ? 'translateX(-84px)' : 'translateX(0)';
@@ -2416,81 +2573,17 @@ class TigerTodoCard extends HTMLElement {
   }
 
   _plusIcon() { return `<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z"/></svg>`; }
-  _dotsIcon() { return `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>`; }
-  _pdfIcon() { return `<svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-1.5h8V18zm0-3.5H8V13h8v1.5zM13 9V3.5L18.5 9H13z"/></svg>`; }
-  _checkIcon() { return `<svg viewBox="0 0 24 24" width="14" height="14"><path fill="#fff" d="M9 16.2l-3.5-3.5L4 14.2l5 5 11-11-1.4-1.4z"/></svg>`; }
-  _trashIcon() { return `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`; }
+  _styles(accent, collapsed) { return this._theme().classic ? this._classicStyles(accent, collapsed) : this._glassStyles(accent, collapsed); }
 
-  // Home Assistant exposes dark/light mode via hass.themes.darkMode. Colors
-  // throughout the card are drawn from this palette instead of being
-  // hardcoded, so the card actually follows whichever mode the dashboard
-  // is in, extended with a handful of tokens specific to this card's own
-  // UI: the add bar, duplicate-item banner, restock suggestion chips,
-  // swipeable rows, and the toast/confirm-dialog popups.
-  _theme() {
-    const dark = this._hass?.themes?.darkMode !== false;
-    return dark ? {
-      dark: true,
-      cardBg: '#13131a', text: '#ffffff', textDim: 'rgba(255,255,255,0.4)',
-      textFaint: 'rgba(255,255,255,0.35)',
-      border: 'rgba(255,255,255,0.08)',
-      iconBtnBg: 'rgba(255,255,255,0.1)', iconBtnColor: 'rgba(255,255,255,0.85)',
-      menuBg: 'rgba(30,30,34,0.98)', menuBorder: 'rgba(255,255,255,0.12)',
-      menuItemBorder: 'rgba(255,255,255,0.08)', menuItemActive: 'rgba(255,255,255,0.06)',
-      menuLabel: 'rgba(255,255,255,0.35)',
-      inputBg: 'rgba(255,255,255,0.07)', inputBorder: 'rgba(255,255,255,0.1)', placeholder: 'rgba(255,255,255,0.35)',
-      dupBg: 'rgba(255,255,255,0.06)', dupBorder: 'rgba(255,255,255,0.1)', dupCancelBg: 'rgba(255,255,255,0.1)',
-      suggestChipBg: 'rgba(255,255,255,0.08)', suggestChipBorder: 'rgba(255,255,255,0.12)',
-      emptyText: 'rgba(255,255,255,0.4)', catHeader: 'rgba(255,255,255,0.35)',
-      swipeBorder: 'rgba(255,255,255,0.06)',
-      checkBorder: 'rgba(255,255,255,0.3)', doneText: 'rgba(255,255,255,0.4)',
-      completedBtn: 'rgba(255,255,255,0.85)', tasksDivider: 'rgba(255,255,255,0.08)',
-      toastBg: 'rgba(30,30,32,0.97)', toastBorder: 'rgba(255,255,255,0.14)', toastText: 'rgba(255,255,255,0.9)',
-      confirmBg: 'rgba(40,40,42,0.94)', confirmBorder: 'rgba(255,255,255,0.12)', confirmDivider: 'rgba(255,255,255,0.14)',
-      confirmTitle: '#fff', confirmMsg: 'rgba(255,255,255,0.6)', confirmCancelBorder: 'rgba(255,255,255,0.14)',
-    } : {
-      dark: false,
-      cardBg: '#ffffff', text: '#1c1c1e', textDim: 'rgba(0,0,0,0.45)',
-      textFaint: 'rgba(0,0,0,0.35)',
-      border: 'rgba(0,0,0,0.08)',
-      iconBtnBg: 'rgba(0,0,0,0.06)', iconBtnColor: 'rgba(0,0,0,0.65)',
-      menuBg: 'rgba(255,255,255,0.98)', menuBorder: 'rgba(0,0,0,0.1)',
-      menuItemBorder: 'rgba(0,0,0,0.08)', menuItemActive: 'rgba(0,0,0,0.05)',
-      menuLabel: 'rgba(0,0,0,0.4)',
-      inputBg: 'rgba(0,0,0,0.045)', inputBorder: 'rgba(0,0,0,0.1)', placeholder: 'rgba(0,0,0,0.35)',
-      dupBg: 'rgba(0,0,0,0.045)', dupBorder: 'rgba(0,0,0,0.1)', dupCancelBg: 'rgba(0,0,0,0.06)',
-      suggestChipBg: 'rgba(0,0,0,0.045)', suggestChipBorder: 'rgba(0,0,0,0.1)',
-      emptyText: 'rgba(0,0,0,0.4)', catHeader: 'rgba(0,0,0,0.4)',
-      swipeBorder: 'rgba(0,0,0,0.08)',
-      checkBorder: 'rgba(0,0,0,0.25)', doneText: 'rgba(0,0,0,0.35)',
-      completedBtn: 'rgba(0,0,0,0.75)', tasksDivider: 'rgba(0,0,0,0.08)',
-      toastBg: 'rgba(255,255,255,0.98)', toastBorder: 'rgba(0,0,0,0.12)', toastText: 'rgba(0,0,0,0.85)',
-      confirmBg: 'rgba(255,255,255,0.97)', confirmBorder: 'rgba(0,0,0,0.1)', confirmDivider: 'rgba(0,0,0,0.12)',
-      confirmTitle: '#1c1c1e', confirmMsg: 'rgba(0,0,0,0.6)', confirmCancelBorder: 'rgba(0,0,0,0.12)',
-    };
-  }
-
-  // Quick white-alpha/black-alpha swap for the many small text and panel
-  // opacities scattered through the food/task lookup popups and PDF
-  // viewer — same opacity value, inverted base colour, the same
-  // convention every named token in _theme() above already follows. A
-  // full redesign of those three popups around a smaller named-token set
-  // (like the rest of this file uses) wasn't worth the churn given how
-  // deep and mechanically repetitive that particular tree is; this gets
-  // the same correct result with far less risk of missing a spot.
-  _ta(opacity) {
-    return this._theme().dark ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,${opacity})`;
-  }
-
-  _styles(accent, collapsed) {
+  _classicStyles(accent, collapsed) {
     const t = this._theme();
     return `
-      :host { display: block; --accent: ${accent}; --tiger-list-max-height: ${Number(this._config.max_list_height) > 0 ? this._config.max_list_height : 340}px; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif; }
+      :host { display: block; --accent: ${accent}; --accent-fill: ${this._fillColor(/^#[0-9a-f]{3,6}$/i.test(this._config.accent_color || '') ? this._config.accent_color : TODO_ACCENT_DEFAULT)}; --delete: ${this._palette('delete').text}; --delete-fill: ${this._fillColor(/^#[0-9a-f]{3,6}$/i.test((this._config.colors || {}).delete || '') ? this._config.colors.delete : TODO_DEFAULTS.delete)}; --crow-list-max-height: ${Number(this._config.max_list_height) > 0 ? this._config.max_list_height : 340}px; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif; }
       ha-card {
-        background: var(--tiger-bg, ${t.cardBg});
-        color: var(--tiger-text, ${t.text});
+        background: var(--crow-bg, ${t.cardBg});
+        color: var(--crow-text, ${t.text});
         border-radius: 24px;
-        padding: 16px;
+        padding: ${collapsed ? '10px 10px 12px' : '16px'};
         backdrop-filter: blur(18px) saturate(150%);
         -webkit-backdrop-filter: blur(18px) saturate(150%);
         box-shadow: ${t.dark ? '0 8px 32px rgba(0,0,0,0.4)' : '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06)'};
@@ -2500,10 +2593,10 @@ class TigerTodoCard extends HTMLElement {
         ${collapsed ? '' : 'min-height: 480px;'}
         box-sizing: border-box;
       }
-      .header { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+      .header { display: flex; flex-direction: column; gap: 4px; margin-bottom: ${collapsed ? '8px' : '12px'}; }
       .title-row { display: flex; align-items: center; justify-content: space-between; }
       .title { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
-      .warn { color: #ff6b6b; font-size: 12px; }
+      .warn { color: var(--delete); font-size: 12px; }
       .header-right { display: flex; align-items: center; gap: 8px; }
       .menu-wrap { position: relative; }
       .menu-btn { width: 32px; height: 32px; }
@@ -2551,7 +2644,8 @@ class TigerTodoCard extends HTMLElement {
         cursor: pointer; transition: transform 0.15s ease, background 0.15s ease; flex-shrink: 0;
       }
       .icon-btn:active { transform: scale(0.9); }
-      .add-btn { background: var(--accent); color: #fff; }
+      #crowCollapseBtn { width: 18px; height: 18px; padding: 0; }
+      .add-btn { background: var(--accent-fill); color: #fff; }
 
       .dup-banner {
         background: ${t.dupBg}; border: 1px solid ${t.dupBorder};
@@ -2561,7 +2655,7 @@ class TigerTodoCard extends HTMLElement {
       .dup-actions button {
         border: none; border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: inherit;
       }
-      .dup-add { background: var(--accent); color: #fff; }
+      .dup-add { background: var(--accent-fill); color: #fff; }
       .dup-cancel { background: ${t.dupCancelBg}; color: ${t.text}; }
 
       .suggest-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
@@ -2586,7 +2680,7 @@ class TigerTodoCard extends HTMLElement {
       }
 
       .list { display: flex; flex-direction: column; }
-      .scroll-region { height: var(--tiger-list-max-height); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+      .scroll-region { height: var(--crow-list-max-height); overflow-y: auto; -webkit-overflow-scrolling: touch; }
       .empty { text-align: center; color: ${t.emptyText}; padding: 24px 0; font-size: 14px; }
       .cat-header {
         font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
@@ -2600,13 +2694,13 @@ class TigerTodoCard extends HTMLElement {
         flex-shrink: 0;
       }
       .swipe-content {
-        display: flex; align-items: center; gap: 12px; background: var(--tiger-bg, ${t.cardBg});
+        display: flex; align-items: center; gap: 12px; background: var(--crow-bg, ${t.cardBg});
         border: 1px solid ${t.swipeBorder}; border-radius: 12px; padding: 12px 14px;
         transition: transform 0.2s ease; position: relative; z-index: 1;
         width: 100%; box-sizing: border-box;
       }
       .delete-btn {
-        position: absolute; top: 0; right: 0; bottom: 0; width: 84px; background: #ff3b30;
+        position: absolute; top: 0; right: 0; bottom: 0; width: 84px; background: var(--delete-fill);
         border: none; border-radius: 12px; color: #fff; display: flex; align-items: center; justify-content: center;
         cursor: pointer; z-index: 0;
       }
@@ -2615,7 +2709,7 @@ class TigerTodoCard extends HTMLElement {
         background: transparent; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
         cursor: pointer; transition: all 0.18s cubic-bezier(0.4,0,0.2,1);
       }
-      .check.checked { background: var(--accent); border-color: var(--accent); transform: scale(1.05); }
+      .check.checked { background: var(--accent-fill); border-color: var(--accent-fill); transform: scale(1.05); }
       .item-text { font-size: 15px; flex: 1; cursor: pointer; }
       .row.done .item-text { text-decoration: line-through; color: ${t.doneText}; }
       .row.compact { margin-bottom: 4px; }
@@ -2640,7 +2734,7 @@ class TigerTodoCard extends HTMLElement {
       }
       .tasks-toggle-row { margin-top: 0; }
 
-      .tiger-toast {
+      .crow-toast {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
         z-index: 50; pointer-events: none;
         background: ${t.toastBg}; border: 1px solid ${t.toastBorder};
@@ -2651,15 +2745,433 @@ class TigerTodoCard extends HTMLElement {
         min-width: 180px; max-width: 88%;
         opacity: 0; transition: opacity 0.22s ease; white-space: nowrap;
       }
-      .tiger-toast.visible { opacity: 1; }
-      .tiger-toast-icon { flex-shrink: 0; width: 18px; height: 18px; }
-      .tiger-toast-icon svg { width: 18px; height: 18px; fill: rgba(255,180,50,0.9); display: block; }
-      .tiger-toast-text { font-size: 13px; font-weight: 500; color: ${t.toastText}; line-height: 1.4; white-space: normal; }
+      .crow-toast.visible { opacity: 1; }
+      .crow-toast-icon { flex-shrink: 0; width: 18px; height: 18px; }
+      .crow-toast-icon svg { width: 18px; height: 18px; fill: rgba(255,180,50,0.9); display: block; }
+      .crow-toast-text { font-size: 13px; font-weight: 500; color: ${t.toastText}; line-height: 1.4; white-space: normal; }
+    `;
+  }
+
+  _dotsIcon() { return `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>`; }
+  _pdfIcon() { return `<svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-1.5h8V18zm0-3.5H8V13h8v1.5zM13 9V3.5L18.5 9H13z"/></svg>`; }
+  _checkIcon() { return `<svg viewBox="0 0 24 24" width="14" height="14"><path fill="#fff" d="M9 16.2l-3.5-3.5L4 14.2l5 5 11-11-1.4-1.4z"/></svg>`; }
+  _trashIcon() { return `<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`; }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  THEME — liquid glass, light / dark / auto, glass opacity and the
+  //  user's colours. Everything the card and its sheets paint comes
+  //  from here (the sheets live outside the shadow DOM, so the values
+  //  are threaded through explicitly).
+  // ═══════════════════════════════════════════════════════════════
+  _isDark() {
+    const mode = this._config?.appearance || 'auto';
+    if (mode === 'dark') return true;
+    if (mode === 'light') return false;
+    return this._hass?.themes?.darkMode !== false;
+  }
+
+  _themeSig() {
+    const c = this._config || {};
+    return `${this._isDark()}|${this._glassOn()}|${c.glass ?? 50}|${c.accent_color || ''}|${JSON.stringify(c.colors || {})}`;
+  }
+
+  // delete / low / medium / high → tuned for the current mode
+  _palette(key) {
+    const c = this._config?.colors;
+    const base = (c && isHex(c[key])) ? c[key].trim() : TODO_DEFAULTS[key];
+    return tuneColor(base, this._isDark());
+  }
+
+  // A colour that can sit behind white text or a white glyph (≥3.2:1) —
+  // used for filled buttons, the check circle and the delete swipe.
+  _fillColor(base) {
+    let [h, s, l] = _rgb2hsl(..._hex2rgb(base));
+    let hex = _hsl2hex(h, s, l);
+    for (let i = 0; i < 60 && _contrast(hex, '#ffffff') < 3.2; i++) { l = Math.max(0.05, l - 0.015); hex = _hsl2hex(h, s, l); }
+    return hex;
+  }
+
+
+  // Which surface the card uses: 'classic' (solid, the original look — the
+  // default) or 'glass' (frosted translucency, blur and highlights).
+  _glassOn() { return this._config?.card_style === 'glass'; }
+
+  _theme() {
+    const sig = this._themeSig();
+    if (this._themeMemo && this._themeMemo.sig === sig) return this._themeMemo.t;
+    const glass = this._glassOn();
+    const t = glass ? this._glassTokens() : this._classicTokens();
+    Object.assign(t, glass ? this._glassShapes(t) : this._classicShapes(t));
+    const acc = tuneColor(isHex(this._config?.accent_color) ? this._config.accent_color.trim() : TODO_ACCENT_DEFAULT, t.dark);
+    t.accentText = acc.text;
+    t.accentDot  = acc.dot;
+    t.classic = !glass;
+    this._themeMemo = { sig, t };
+    return t;
+  }
+
+  // Shapes and surfaces for the sheets and pop-ups (they live outside the shadow DOM).
+  _glassShapes(t) {
+    return {
+      font: CC_FONT,
+      sheetShape: 'border-radius:34px;padding:20px 20px 22px;',
+      reportShape: 'border-radius:32px;padding:20px;',
+      overlayCss: `padding:12px;padding-bottom:max(12px, env(safe-area-inset-bottom));box-sizing:border-box;background:${t.overlay};-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);`,
+      reportOverlayCss: `padding:18px;box-sizing:border-box;background:${t.overlay};backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);`,
+      closeCss: `border:1px solid ${t.chipEdge};border-radius:50%;width:32px;height:32px;`,
+      msgShape: 'border-radius:16px;padding:10px 14px;',
+      boxA: `border:1px solid ${t.sheetCardBorder};border-radius:16px;padding:11px 13px;`,
+      boxB: `border:1px solid ${t.sheetCardBorder};border-radius:16px;padding:12px 14px;`,
+      boxC: `border:1px solid ${t.sheetCardBorder};border-radius:16px;overflow:hidden;`,
+      boxD: `${t.boxD}`,
+      discShape: `width:38px;height:38px;border-radius:50%;border:1px solid ${t.chipEdge};`,
+      pillCss: `width:96px;border-radius:32px;border:1px solid ${t.chipEdge};box-sizing:border-box;box-shadow:inset 0 1px 0 ${t.hi};`,
+      popupPdf: `${t.sheetCss}border-radius:32px;padding:22px;`,
+      popupFood: `${t.sheetCss}border-radius:32px;padding:22px;`,
+      popupLightbox: `${t.sheetCss}border-radius:28px;padding:16px;`,
+      confirmMax: '280px', confirmRadius: '24px', confirmShadow: `0 16px 48px rgba(0,0,0,0.35), inset 0 1px 0 ${t.hi}`,
+    };
+  }
+
+  _classicShapes(t) {
+    const dark = t.dark, ta = o => dark ? `rgba(255,255,255,${o})` : `rgba(0,0,0,${o})`;
+    return {
+      font: "-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif",
+      sheetCss: `background:${t.sheetBg || t.cardBg};`,
+      sheetShape: '',
+      reportShape: 'border-radius:20px;padding:18px;',
+      overlay: 'rgba(0,0,0,0.6)',
+      overlayCss: 'background:rgba(0,0,0,0.6);',
+      reportOverlayCss: 'padding:18px;background:rgba(0,0,0,0.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);',
+      closeCss: 'border:none;border-radius:50%;width:28px;height:28px;',
+      msgShape: 'border-radius:12px;padding:9px 13px;',
+      boxA: 'border-radius:12px;padding:10px 12px;',
+      boxB: 'border-radius:12px;padding:12px 13px;',
+      boxC: 'border-radius:12px;overflow:hidden;',
+      boxD: 'border-radius:14px;overflow:hidden;padding:2px;',
+      discShape: 'width:36px;height:36px;border-radius:50%;',
+      pillCss: 'width:92px;border-radius:26px;',
+      chipEdge: dark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.1)',
+      hi: dark ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.5)',
+      tipEdge: dark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.16)',
+      tipDim: dark ? 'rgba(255,255,255,0.65)' : 'rgba(60,60,67,0.7)',
+      popupPdf: `background:${dark ? 'rgba(24,24,28,0.96)' : 'rgba(255,255,255,0.97)'};border:1px solid ${ta(0.15)};border-radius:24px;box-shadow:0 24px 64px ${dark ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.18)'};padding:20px;`,
+      popupFood: `background:${dark ? 'rgba(24,24,28,0.92)' : 'rgba(255,255,255,0.96)'};backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border:1px solid ${ta(0.15)};border-radius:24px;box-shadow:0 24px 64px ${dark ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.18)'};padding:20px;`,
+      popupLightbox: `background:${t.cardBg};border-radius:20px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,${dark ? '0.6' : '0.25'});`,
+      confirmMax: '270px', confirmRadius: '14px', confirmShadow: '0 12px 40px rgba(0,0,0,0.35)',
+    };
+  }
+
+  _glassTokens() {
+    const dark = this._isDark();
+    let a = parseFloat(this._config?.glass);
+    a = isNaN(a) ? 0.5 : Math.min(1, Math.max(0, a / 100));
+    const f = n => n.toFixed(3);
+    const t = dark ? {
+      dark: true,
+      text: '#ffffff', textDim: 'rgba(255,255,255,0.68)', textFaint: 'rgba(255,255,255,0.5)', textMuted: 'rgba(255,255,255,0.6)',
+      glass1: `rgba(255,255,255,${f(0.10 + a * 0.16)})`, glass2: `rgba(255,255,255,${f(0.03 + a * 0.08)})`,
+      edge: 'rgba(255,255,255,0.26)', hi: 'rgba(255,255,255,0.42)', lo: 'rgba(255,255,255,0.07)',
+      shadow: '0 14px 36px rgba(0,0,0,0.32)',
+      chip: 'rgba(255,255,255,0.10)', chipEdge: 'rgba(255,255,255,0.16)',
+      border: 'rgba(255,255,255,0.18)', rowActive: 'rgba(255,255,255,0.17)',
+      iconBtnBg: 'rgba(255,255,255,0.13)', iconBtnColor: 'rgba(255,255,255,0.78)',
+      menuBg: 'linear-gradient(160deg, rgba(74,74,84,0.92), rgba(36,36,42,0.96))', menuBorder: 'rgba(255,255,255,0.2)',
+      menuItemBorder: 'rgba(255,255,255,0.1)', menuItemActive: 'rgba(255,255,255,0.1)', menuLabel: 'rgba(255,255,255,0.5)',
+      searchBg: 'rgba(255,255,255,0.10)', searchBorder: 'rgba(255,255,255,0.16)', placeholder: 'rgba(255,255,255,0.45)',
+      dot: 'rgba(255,255,255,0.3)',
+      sheetCss: 'background:linear-gradient(160deg,rgba(70,70,80,0.88),rgba(30,30,36,0.94));border:1px solid rgba(255,255,255,0.22);box-shadow:0 24px 64px rgba(0,0,0,0.38),inset 0 1px 0 rgba(255,255,255,0.4);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);',
+      sheetCard: 'rgba(255,255,255,0.10)', sheetCardBorder: 'rgba(255,255,255,0.12)',
+      closeBtnBg: 'rgba(255,255,255,0.13)', closeBtnColor: 'rgba(255,255,255,0.78)', inputBg: 'rgba(255,255,255,0.12)',
+      overlay: 'rgba(0,0,0,0.5)',
+      cardBg: '#26262c', border: 'rgba(255,255,255,0.18)',
+      iconBtnBg: 'rgba(255,255,255,0.13)', iconBtnColor: 'rgba(255,255,255,0.9)',
+      inputBg: 'rgba(255,255,255,0.10)', inputBorder: 'rgba(255,255,255,0.16)',
+      dupBg: 'rgba(255,255,255,0.08)', dupBorder: 'rgba(255,255,255,0.16)', dupCancelBg: 'rgba(255,255,255,0.14)',
+      suggestChipBg: 'rgba(255,255,255,0.10)', suggestChipBorder: 'rgba(255,255,255,0.16)',
+      emptyText: 'rgba(255,255,255,0.6)', catHeader: 'rgba(255,255,255,0.55)', swipeBorder: 'rgba(255,255,255,0.10)',
+      checkBorder: 'rgba(255,255,255,0.4)', doneText: 'rgba(255,255,255,0.5)', completedBtn: 'rgba(255,255,255,0.9)', tasksDivider: 'rgba(255,255,255,0.14)',
+      toastBg: 'rgba(50,50,58,0.92)', toastBorder: 'rgba(255,255,255,0.2)', toastText: 'rgba(255,255,255,0.92)',
+      confirmBg: 'linear-gradient(160deg, rgba(74,74,84,0.94), rgba(36,36,42,0.97))', confirmBorder: 'rgba(255,255,255,0.2)', confirmDivider: 'rgba(255,255,255,0.16)',
+      confirmTitle: '#ffffff', confirmMsg: 'rgba(255,255,255,0.7)', confirmCancelBorder: 'rgba(255,255,255,0.16)',
+      tipBg: 'rgba(19,19,22,0.86)', tipEdge: 'rgba(255,255,255,0.18)', tipDim: 'rgba(255,255,255,0.65)',
+    } : {
+      dark: false,
+      text: '#1c1c1e', textDim: 'rgba(60,60,67,0.72)', textFaint: 'rgba(60,60,67,0.55)', textMuted: '#6c6c70',
+      glass1: `rgba(255,255,255,${f(0.50 + a * 0.32)})`, glass2: `rgba(255,255,255,${f(0.34 + a * 0.30)})`,
+      edge: 'rgba(255,255,255,0.85)', hi: 'rgba(255,255,255,0.95)', lo: 'rgba(0,0,0,0.04)',
+      shadow: '0 10px 30px rgba(28,36,80,0.14), 0 0 0 0.5px rgba(0,0,0,0.05)',
+      chip: 'rgba(120,120,128,0.12)', chipEdge: 'rgba(120,120,128,0.12)',
+      border: 'rgba(120,120,128,0.2)', rowActive: 'rgba(120,120,128,0.2)',
+      iconBtnBg: 'rgba(120,120,128,0.14)', iconBtnColor: 'rgba(60,60,67,0.78)',
+      menuBg: 'linear-gradient(160deg, rgba(255,255,255,0.96), rgba(244,244,250,0.98))', menuBorder: 'rgba(0,0,0,0.08)',
+      menuItemBorder: 'rgba(60,60,67,0.12)', menuItemActive: 'rgba(120,120,128,0.14)', menuLabel: 'rgba(60,60,67,0.55)',
+      searchBg: 'rgba(120,120,128,0.12)', searchBorder: 'rgba(120,120,128,0.14)', placeholder: 'rgba(60,60,67,0.5)',
+      dot: 'rgba(0,0,0,0.25)',
+      sheetCss: 'background:linear-gradient(160deg,rgba(255,255,255,0.92),rgba(244,244,250,0.94));border:1px solid rgba(255,255,255,0.9);box-shadow:0 24px 64px rgba(0,0,0,0.25),inset 0 1px 0 rgba(255,255,255,0.9);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);',
+      sheetCard: 'rgba(120,120,128,0.12)', sheetCardBorder: 'rgba(120,120,128,0.14)',
+      closeBtnBg: 'rgba(120,120,128,0.14)', closeBtnColor: 'rgba(60,60,67,0.78)', inputBg: 'rgba(120,120,128,0.14)',
+      overlay: 'rgba(0,0,0,0.30)',
+      cardBg: '#f6f6f9', border: 'rgba(120,120,128,0.2)',
+      iconBtnBg: 'rgba(120,120,128,0.14)', iconBtnColor: 'rgba(60,60,67,0.85)',
+      inputBg: 'rgba(120,120,128,0.12)', inputBorder: 'rgba(120,120,128,0.14)',
+      dupBg: 'rgba(120,120,128,0.10)', dupBorder: 'rgba(120,120,128,0.16)', dupCancelBg: 'rgba(120,120,128,0.16)',
+      suggestChipBg: 'rgba(120,120,128,0.12)', suggestChipBorder: 'rgba(120,120,128,0.16)',
+      emptyText: 'rgba(60,60,67,0.6)', catHeader: 'rgba(60,60,67,0.6)', swipeBorder: 'rgba(120,120,128,0.14)',
+      checkBorder: 'rgba(60,60,67,0.35)', doneText: 'rgba(60,60,67,0.5)', completedBtn: 'rgba(28,28,30,0.85)', tasksDivider: 'rgba(60,60,67,0.16)',
+      toastBg: 'rgba(255,255,255,0.96)', toastBorder: 'rgba(120,120,128,0.2)', toastText: 'rgba(28,28,30,0.9)',
+      confirmBg: 'linear-gradient(160deg, rgba(255,255,255,0.97), rgba(244,244,250,0.98))', confirmBorder: 'rgba(120,120,128,0.2)', confirmDivider: 'rgba(60,60,67,0.16)',
+      confirmTitle: '#1c1c1e', confirmMsg: 'rgba(60,60,67,0.7)', confirmCancelBorder: 'rgba(60,60,67,0.16)',
+      tipBg: 'rgba(255,255,255,0.94)', tipEdge: 'rgba(60,60,67,0.16)', tipDim: 'rgba(60,60,67,0.7)',
+    };
+    return t;
+  }
+
+  _classicTokens() {
+    const dark = this._isDark();
+    const t = dark ? {
+      dark: true,
+      cardBg: '#13131a', text: '#ffffff', textDim: 'rgba(255,255,255,0.4)',
+      textFaint: 'rgba(255,255,255,0.35)',
+      border: 'rgba(255,255,255,0.08)',
+      iconBtnBg: 'rgba(255,255,255,0.1)', iconBtnColor: 'rgba(255,255,255,0.85)',
+      menuBg: 'rgba(30,30,34,0.98)', menuBorder: 'rgba(255,255,255,0.12)',
+      menuItemBorder: 'rgba(255,255,255,0.08)', menuItemActive: 'rgba(255,255,255,0.06)',
+      menuLabel: 'rgba(255,255,255,0.35)',
+      inputBg: 'rgba(255,255,255,0.07)', inputBorder: 'rgba(255,255,255,0.1)', placeholder: 'rgba(255,255,255,0.35)',
+      dupBg: 'rgba(255,255,255,0.06)', dupBorder: 'rgba(255,255,255,0.1)', dupCancelBg: 'rgba(255,255,255,0.1)',
+      suggestChipBg: 'rgba(255,255,255,0.08)', suggestChipBorder: 'rgba(255,255,255,0.12)',
+      emptyText: 'rgba(255,255,255,0.4)', catHeader: 'rgba(255,255,255,0.35)',
+      swipeBorder: 'rgba(255,255,255,0.06)',
+      checkBorder: 'rgba(255,255,255,0.3)', doneText: 'rgba(255,255,255,0.4)',
+      completedBtn: 'rgba(255,255,255,0.85)', tasksDivider: 'rgba(255,255,255,0.08)',
+      toastBg: 'rgba(30,30,32,0.97)', toastBorder: 'rgba(255,255,255,0.14)', toastText: 'rgba(255,255,255,0.9)',
+      confirmBg: 'rgba(40,40,42,0.94)', confirmBorder: 'rgba(255,255,255,0.12)', confirmDivider: 'rgba(255,255,255,0.14)',
+      confirmTitle: '#fff', confirmMsg: 'rgba(255,255,255,0.6)', confirmCancelBorder: 'rgba(255,255,255,0.14)',
+    } : {
+      dark: false,
+      cardBg: '#ffffff', text: '#1c1c1e', textDim: 'rgba(0,0,0,0.45)',
+      textFaint: 'rgba(0,0,0,0.35)',
+      border: 'rgba(0,0,0,0.08)',
+      iconBtnBg: 'rgba(0,0,0,0.06)', iconBtnColor: 'rgba(0,0,0,0.65)',
+      menuBg: 'rgba(255,255,255,0.98)', menuBorder: 'rgba(0,0,0,0.1)',
+      menuItemBorder: 'rgba(0,0,0,0.08)', menuItemActive: 'rgba(0,0,0,0.05)',
+      menuLabel: 'rgba(0,0,0,0.4)',
+      inputBg: 'rgba(0,0,0,0.045)', inputBorder: 'rgba(0,0,0,0.1)', placeholder: 'rgba(0,0,0,0.35)',
+      dupBg: 'rgba(0,0,0,0.045)', dupBorder: 'rgba(0,0,0,0.1)', dupCancelBg: 'rgba(0,0,0,0.06)',
+      suggestChipBg: 'rgba(0,0,0,0.045)', suggestChipBorder: 'rgba(0,0,0,0.1)',
+      emptyText: 'rgba(0,0,0,0.4)', catHeader: 'rgba(0,0,0,0.4)',
+      swipeBorder: 'rgba(0,0,0,0.08)',
+      checkBorder: 'rgba(0,0,0,0.25)', doneText: 'rgba(0,0,0,0.35)',
+      completedBtn: 'rgba(0,0,0,0.75)', tasksDivider: 'rgba(0,0,0,0.08)',
+      toastBg: 'rgba(255,255,255,0.98)', toastBorder: 'rgba(0,0,0,0.12)', toastText: 'rgba(0,0,0,0.85)',
+      confirmBg: 'rgba(255,255,255,0.97)', confirmBorder: 'rgba(0,0,0,0.1)', confirmDivider: 'rgba(0,0,0,0.12)',
+      confirmTitle: '#1c1c1e', confirmMsg: 'rgba(0,0,0,0.6)', confirmCancelBorder: 'rgba(0,0,0,0.12)',
+    };
+    return t;
+  }
+
+  _giColor(cat) {
+    return cat === 'low' ? this._palette('low').text : cat === 'high' ? this._palette('high').text : cat === 'medium' ? this._palette('medium').text : this._ta(0.4);
+  }
+
+  // Quick white-alpha/black-alpha swap for the many small text and panel
+  // opacities scattered through the food/task lookup popups and PDF
+  // viewer — same opacity value, inverted base colour, the same
+  // convention every named token in _theme() above already follows. A
+  // full redesign of those three popups around a smaller named-token set
+  // (like the rest of this file uses) wasn't worth the churn given how
+  // deep and mechanically repetitive that particular tree is; this gets
+  // the same correct result with far less risk of missing a spot.
+  _ta(opacity) {
+    return this._theme().dark ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,${opacity})`;
+  }
+
+  _glassStyles(accent, collapsed) {
+    const t = this._theme();
+    return `
+      :host { display: block; --accent: ${accent}; --accent-fill: ${this._fillColor(/^#[0-9a-f]{3,6}$/i.test(this._config.accent_color || '') ? this._config.accent_color : TODO_ACCENT_DEFAULT)}; --delete: ${this._palette('delete').text}; --delete-fill: ${this._fillColor(/^#[0-9a-f]{3,6}$/i.test((this._config.colors || {}).delete || '') ? this._config.colors.delete : TODO_DEFAULTS.delete)}; --crow-list-max-height: ${Number(this._config.max_list_height) > 0 ? this._config.max_list_height : 340}px; font-family: ${CC_FONT}; }
+      ha-card {
+        background: var(--crow-bg, linear-gradient(160deg, ${t.glass1}, ${t.glass2}));
+        color: var(--crow-text, ${t.text});
+        border-radius: 28px;
+        padding: ${collapsed ? '12px' : '16px'};
+        backdrop-filter: blur(24px) saturate(170%);
+        -webkit-backdrop-filter: blur(24px) saturate(170%);
+        border: 1px solid ${t.edge};
+        box-shadow: inset 0 1px 0 ${t.hi}, inset 0 -1px 0 ${t.lo}, ${t.shadow};
+        overflow: hidden;
+        position: relative;
+        ${collapsed ? '' : 'min-height: 480px;'}
+        box-sizing: border-box;
+      }
+      .header { display: flex; flex-direction: column; gap: 4px; margin-bottom: ${collapsed ? '8px' : '12px'}; }
+      .title-row { display: flex; align-items: center; justify-content: space-between; }
+      .title { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+      .warn { color: var(--delete); font-size: 12px; }
+      .header-right { display: flex; align-items: center; gap: 8px; }
+      .menu-wrap { position: relative; }
+      .menu-btn { width: 32px; height: 32px; }
+      .menu-dropdown {
+        position: absolute; top: 40px; right: 0; z-index: 60; min-width: 210px;
+        background: ${t.menuBg}; border: 1px solid ${t.menuBorder};
+        border-radius: 20px; box-shadow: 0 12px 36px rgba(0,0,0,0.3), inset 0 1px 0 ${t.hi};
+        overflow: hidden; backdrop-filter: blur(30px) saturate(170%); -webkit-backdrop-filter: blur(30px) saturate(170%);
+      }
+      .menu-item {
+        display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box;
+        padding: 11px 14px; background: none; border: none; color: ${t.text}; font-size: 13px;
+        font-weight: 500; font-family: inherit; cursor: pointer; text-align: left;
+        border-bottom: 1px solid ${t.menuItemBorder}; -webkit-tap-highlight-color: transparent;
+      }
+      .menu-item:last-child { border-bottom: none; }
+      .menu-item:active { background: ${t.menuItemActive}; }
+      .menu-toggle-item { justify-content: space-between; cursor: default; }
+      .menu-toggle-item:active { background: none; }
+      .menu-section-label {
+        padding: 9px 14px 5px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+        text-transform: uppercase; color: ${t.menuLabel};
+      }
+      .menu-section-divider { border-top: 1px solid ${t.menuItemBorder}; margin-top: 4px; }
+      .toggle-switch { position: relative; flex-shrink: 0; width: 51px; height: 31px; }
+      .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+      .toggle-track { position: absolute; inset: 0; border-radius: 31px; background: rgba(120,120,128,0.32); cursor: pointer; transition: background 0.25s ease; }
+      .toggle-track::after { content: ''; position: absolute; width: 27px; height: 27px; border-radius: 50%; background: #fff; top: 2px; left: 2px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); transition: transform 0.25s ease; }
+      .toggle-switch input:checked + .toggle-track { background: #34C759; }
+      .toggle-switch input:checked + .toggle-track::after { transform: translateX(20px); }
+      .toggle-switch.small { width: 38px; height: 22px; }
+      .toggle-switch.small .toggle-track::after { width: 18px; height: 18px; top: 2px; left: 2px; }
+      .toggle-switch.small input:checked + .toggle-track::after { transform: translateX(16px); }
+
+      .add-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+      .add-input {
+        flex: 1; background: ${t.inputBg}; border: 1px solid ${t.inputBorder};
+        border-radius: 999px; padding: 10px 16px; color: ${t.text}; font-size: 16px;
+        font-family: inherit; outline: none; box-shadow: inset 0 1px 0 ${t.hi};
+      }
+      .add-input::placeholder { color: ${t.placeholder}; }
+      .icon-btn {
+        background: ${t.iconBtnBg}; border: 1px solid ${t.chipEdge}; box-shadow: inset 0 1px 0 ${t.hi}; color: ${t.iconBtnColor};
+        width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: transform 0.15s ease, background 0.15s ease; flex-shrink: 0;
+      }
+      .icon-btn:active { transform: scale(0.9); }
+      /* header buttons: same 32px round buttons as the other Crow cards */
+      .icon-btn.menu-btn, #crowCollapseBtn { width: 32px; height: 32px; padding: 0; box-shadow: none; }
+      .add-btn { background: var(--accent-fill); border-color: transparent; color: #fff; }
+
+      .dup-banner {
+        background: ${t.dupBg}; border: 1px solid ${t.dupBorder};
+        border-radius: 18px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px;
+      }
+      .dup-actions { display: flex; gap: 8px; margin-top: 8px; }
+      .dup-actions button {
+        border: none; border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: inherit;
+      }
+      .dup-add { background: var(--accent-fill); color: #fff; }
+      .dup-cancel { background: ${t.dupCancelBg}; color: ${t.text}; }
+
+      .suggest-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+      .suggest-label { font-size: 12px; color: ${t.textDim}; margin-right: 2px; }
+      .suggest-chip {
+        display: inline-flex; align-items: stretch; background: ${t.suggestChipBg};
+        border: 1px solid ${t.suggestChipBorder}; border-radius: 999px; overflow: hidden;
+      }
+      .suggest-chip-add {
+        background: none; border: none; color: ${t.text}; padding: 4px 8px 4px 10px;
+        font-size: 12px; cursor: pointer; font-family: inherit;
+      }
+      .suggest-chip-x {
+        background: none; border: none; border-left: 1px solid ${t.suggestChipBorder};
+        color: ${t.textDim}; padding: 4px 8px; font-size: 10px; cursor: pointer; font-family: inherit;
+        display: flex; align-items: center;
+      }
+      .suggest-chip-x:active { color: ${t.text}; }
+      .suggest-clear-all {
+        background: none; border: none; color: ${t.textDim}; font-size: 11px;
+        cursor: pointer; font-family: inherit; margin-left: 2px; text-decoration: underline;
+      }
+
+      .list { display: flex; flex-direction: column; }
+      .scroll-region { height: var(--crow-list-max-height); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+      .empty { text-align: center; color: ${t.emptyText}; padding: 24px 0; font-size: 14px; }
+      .cat-header {
+        font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+        color: ${t.catHeader}; margin: 14px 0 4px 4px; flex-shrink: 0;
+      }
+      .cat-header:first-child { margin-top: 0; }
+
+      .row {
+        position: relative; overflow: hidden; border-radius: 18px; margin-bottom: 6px;
+        width: 100%; box-sizing: border-box; isolation: isolate; -webkit-transform: translateZ(0);
+        flex-shrink: 0;
+      }
+      .swipe-content {
+        display: flex; align-items: center; gap: 12px; background: ${t.chip};
+        border: 1px solid ${t.swipeBorder}; border-radius: 18px; padding: 12px 14px;
+        box-shadow: inset 0 1px 0 ${t.hi};
+        transition: transform 0.2s ease; position: relative; z-index: 1;
+        width: 100%; box-sizing: border-box;
+      }
+      .delete-btn {
+        position: absolute; top: 0; right: 0; bottom: 0; width: 84px; background: var(--delete-fill);
+        border: none; border-radius: 18px; color: #fff; display: flex; align-items: center; justify-content: center;
+        cursor: pointer; z-index: 0;
+        /* the rows are translucent glass now, so the button stays hidden until a row is actually swiped */
+        opacity: 0; transition: opacity 0.15s ease;
+      }
+      .row.swiping .delete-btn, .row.swiped-open .delete-btn { opacity: 1; }
+      .check {
+        width: 24px; height: 24px; border-radius: 50%; border: 2px solid ${t.checkBorder};
+        background: transparent; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: all 0.18s cubic-bezier(0.4,0,0.2,1);
+      }
+      .check.checked { background: var(--accent-fill); border-color: var(--accent-fill); transform: scale(1.05); }
+      .item-text { font-size: 15px; flex: 1; cursor: pointer; }
+      .row.done .item-text { text-decoration: line-through; color: ${t.doneText}; }
+      .row.compact { margin-bottom: 4px; border-radius: 14px; }
+      .row.compact .swipe-content { border-radius: 14px; }
+      .row.compact .swipe-content { gap: 10px; padding: 7px 12px; }
+      .row.compact .check { width: 19px; height: 19px; }
+      .row.compact .item-text { font-size: 13.5px; }
+      .item-rename-input {
+        font-size: 15px; flex: 1; min-width: 0; font-family: inherit; color: ${t.text};
+        background: ${t.inputBg}; border: 1px solid var(--accent); border-radius: 6px;
+        padding: 3px 7px; outline: none;
+      }
+
+      .completed-toggle { display: flex; align-items: center; justify-content: space-between; margin: 10px 2px 6px; }
+      .completed-btn, .clear-btn {
+        background: none; border: none; color: ${t.completedBtn}; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit;
+      }
+      .clear-btn { color: var(--accent); font-weight: 600; }
+      .completed-list .swipe-content { cursor: pointer; }
+
+      .tasks-section {
+        margin-top: 14px; padding-top: 14px; border-top: 1px solid ${t.tasksDivider};
+      }
+      .tasks-toggle-row { margin-top: 0; }
+
+      .crow-toast {
+        position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+        z-index: 50; pointer-events: none;
+        background: ${t.toastBg}; border: 1px solid ${t.toastBorder};
+        border-radius: 20px; padding: 10px 16px;
+        display: flex; align-items: center; gap: 10px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+        backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        min-width: 180px; max-width: 88%;
+        opacity: 0; transition: opacity 0.22s ease; white-space: nowrap;
+      }
+      .crow-toast.visible { opacity: 1; }
+      .crow-toast-icon { flex-shrink: 0; width: 18px; height: 18px; }
+      .crow-toast-icon svg { width: 18px; height: 18px; fill: rgba(255,180,50,0.9); display: block; }
+      .crow-toast-text { font-size: 13px; font-weight: 500; color: ${t.toastText}; line-height: 1.4; white-space: normal; }
     `;
   }
 }
 
-class TigerTodoCardEditor extends HTMLElement {
+class CrowTodoCardEditor extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -2677,6 +3189,9 @@ class TigerTodoCardEditor extends HTMLElement {
     this._config = {
       title: 'Shopping List',
       accent_color: '#007AFF',
+      appearance: 'auto',
+      card_style: 'classic',
+      glass: 50,
       show_add_bar: true,
       group_by_category: true,
       persistent_storage: false,
@@ -2702,15 +3217,95 @@ class TigerTodoCardEditor extends HTMLElement {
     this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this._config }, bubbles: true, composed: true }));
   }
 
+  _updateConfig(key, value) {
+    this._config = { ...this._config, [key]: value };
+    this._emit();
+  }
+
+  // ── Colours (delete / low / medium / high GI / accent) ─────────────────────
+
+  _hex6(v) {
+    let h = String(v).replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    return '#' + h.toLowerCase();
+  }
+
+  _effectiveColours() {
+    const c = this._config.colors || {};
+    const out = {};
+    ['delete', 'low', 'medium', 'high'].forEach(k => { out[k] = this._hex6(isHex(c[k]) ? c[k] : TODO_DEFAULTS[k]); });
+    out.accent = this._hex6(isHex(this._config.accent_color) ? this._config.accent_color : TODO_ACCENT_DEFAULT);
+    return out;
+  }
+
+  _paintColour(key, base, customised) {
+    const root = this.shadowRoot;
+    const q = sel => root.querySelector(sel);
+    const hex = this._hex6(base);
+    const prev = q(`[data-cprev="${key}"]`); if (prev) prev.style.background = hex;
+    const dot  = q(`[data-cdot="${key}"]`);  if (dot)  dot.style.background = hex;
+    const inp  = q(`[data-cinput="${key}"]`); if (inp) inp.value = hex;
+    const hexIn = q(`[data-chex="${key}"]`); if (hexIn && root.activeElement !== hexIn) hexIn.value = hex;
+    const rs = q(`[data-creset="${key}"]`);  if (rs && customised != null) rs.hidden = !customised;
+    // dark + light "Aa" previews show how the colour is tuned for each mode
+    const d = q(`[data-pvd="${key}"]`), l = q(`[data-pvl="${key}"]`);
+    if (d) { d.style.background = CC_SURFACE.dark;  d.style.color = tuneColor(hex, true).text; }
+    if (l) { l.style.background = CC_SURFACE.light; l.style.color = tuneColor(hex, false).text; }
+  }
+
+  _syncColours() {
+    const root = this.shadowRoot;
+    const eff = this._effectiveColours();
+    const cfgC = this._config.colors || {};
+    ['delete', 'low', 'medium', 'high'].forEach(k => this._paintColour(k, eff[k], isHex(cfgC[k])));
+    this._paintColour('accent', eff.accent, eff.accent !== TODO_ACCENT_DEFAULT);
+    root.querySelectorAll('.preset-opt').forEach(b => {
+      const pr = COLOR_PRESETS.find(x => x.id === b.dataset.preset);
+      const target = { ...TODO_DEFAULTS, ...(pr.colors || {}), accent: pr.accent };
+      const on = ['delete', 'low', 'medium', 'high', 'accent'].every(k => this._hex6(target[k]) === eff[k]);
+      b.classList.toggle('is-selected', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  _setColour(key, value) {
+    if (!isHex(value)) { this._syncColours(); return; }
+    if (key === 'accent') { this._updateConfig('accent_color', this._hex6(value)); }
+    else { this._updateConfig('colors', { ...(this._config.colors || {}), [key]: this._hex6(value) }); }
+    this._syncColours();
+  }
+
+  _resetColour(key) {
+    if (key === 'accent') { this._updateConfig('accent_color', TODO_ACCENT_DEFAULT); }
+    else {
+      const next = { ...(this._config.colors || {}) };
+      delete next[key];
+      if (Object.keys(next).length) this._updateConfig('colors', next);
+      else { const cfg = { ...this._config }; delete cfg.colors; this._config = cfg; this._emit(); }
+    }
+    this._syncColours();
+  }
+
+  _applyPreset(id) {
+    const pr = COLOR_PRESETS.find(x => x.id === id); if (!pr) return;
+    const cfg = { ...this._config, accent_color: pr.accent };
+    if (pr.colors) cfg.colors = { ...pr.colors }; else delete cfg.colors;
+    this._config = cfg;
+    this._emit();
+    this._syncColours();
+  }
+
   _updateUi() {
     const root = this.shadowRoot;
     if (!root) return;
 
-    const swatch = root.getElementById('accent-swatch-preview');
-    const dot = root.getElementById('accent-dot');
-    const val = this._config.accent_color || '#007AFF';
-    if (swatch) swatch.style.background = val;
-    if (dot) dot.style.background = val;
+    const appearance = this._config.appearance || 'auto';
+    root.querySelectorAll('.seg-btn[data-appearance]').forEach(b => b.classList.toggle('is-selected', b.dataset.appearance === appearance));
+    const glassOn = this._config.card_style === 'glass';
+    root.querySelectorAll('.seg-btn[data-cardstyle]').forEach(b => b.classList.toggle('is-selected', b.dataset.cardstyle === (glassOn ? 'glass' : 'classic')));
+    const glassRow = root.getElementById('glassRow');
+    if (glassRow) { glassRow.style.opacity = glassOn ? '1' : '0.4'; glassRow.style.pointerEvents = glassOn ? '' : 'none'; }
+    this._syncColours();
 
     const entityVal = root.getElementById('entity-picker-value');
     if (entityVal) entityVal.textContent = this._entityLabel(this._config.entity) || 'Select…';
@@ -2853,6 +3448,23 @@ class TigerTodoCardEditor extends HTMLElement {
         .section-heading { font-size: 14px; font-weight: 600; }
         .section-subheading { font-size: 11px; color: #888; margin-top: 1px; }
         .chevron { width: 18px; height: 18px; fill: var(--secondary-text-color, rgba(0,0,0,0.5)); transition: transform 0.25s ease; flex-shrink: 0; }
+        .hint { font-size: 11px; color: #888; line-height: 1.4; }
+        .seg { display: flex; padding: 2px; gap: 2px; border-radius: 10px; background: rgba(120,120,128,0.16); }
+        .seg-btn { flex: 1; border: none; border-radius: 8px; padding: 8px 6px; cursor: pointer; background: transparent; color: var(--primary-text-color); font-family: inherit; font-size: 13px; font-weight: 600; transition: background .15s, box-shadow .15s; }
+        .seg-btn.is-selected { background: var(--card-background-color, #fff); box-shadow: 0 1px 4px rgba(0,0,0,0.25); }
+        .range-row { display: flex; align-items: center; gap: 10px; }
+        .range-row span { font-size: 11px; color: #888; flex-shrink: 0; }
+        input[type="range"] { flex: 1; accent-color: #007AFF; margin: 4px 0; }
+        .preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .preset-opt { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 12px; cursor: pointer; background: rgba(128,128,128,0.06); color: var(--primary-text-color); border: 2px solid transparent; font-family: inherit; font-size: 13px; font-weight: 600; transition: border-color .15s, background .15s; }
+        .preset-opt.is-selected { border-color: #007AFF; background: rgba(0,122,255,0.08); }
+        .preset-dots { display: inline-flex; }
+        .preset-dots i { width: 14px; height: 14px; border-radius: 50%; margin-left: -4px; border: 1.5px solid var(--card-background-color, #fff); }
+        .preset-dots i:first-child { margin-left: 0; }
+        .colour-card .color-prev { display: flex; gap: 4px; flex-shrink: 0; }
+        .pv { width: 30px; height: 24px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; border: 1px solid rgba(128,128,128,0.25); }
+        .reset-btn { border: none; background: none; color: #007AFF; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 2px; flex-shrink: 0; }
+        .colour-card + .colour-card { border-top: 1px solid var(--divider-color, rgba(128,128,128,0.2)); }
       </style>
 
       <div class="container">
@@ -2900,17 +3512,30 @@ class TigerTodoCardEditor extends HTMLElement {
               <label>Title</label>
               <input type="text" id="title" value="${this._escapeHtml(this._config.title || '')}" placeholder="Shopping List" />
             </div>
-            <div class="colour-card">
-              <label class="colour-swatch">
-                <input type="color" id="accent_color_picker" value="${/^#[0-9a-fA-F]{6}$/.test(this._config.accent_color || '') ? this._config.accent_color : '#007AFF'}">
-                <span class="colour-swatch-preview" id="accent-swatch-preview" style="background:${this._config.accent_color || '#007AFF'};"></span>
-              </label>
-              <div class="colour-info">
-                <div class="colour-label">Accent color</div>
-                <div class="colour-hex-row">
-                  <span class="colour-dot" id="accent-dot" style="background:${this._config.accent_color || '#007AFF'};"></span>
-                  <input class="colour-hex" id="accent_color" value="${this._escapeHtml(this._config.accent_color || '#007AFF')}" spellcheck="false" autocomplete="off">
-                </div>
+            <div class="select-row" style="border-bottom: 1px solid var(--divider-color, rgba(128,128,128,0.2));">
+              <label>Style</label>
+              <div class="hint">Classic is a plain solid card. Glass adds frosted translucency, blur and soft highlights.</div>
+              <div class="seg" id="cardstyle_seg">
+                <button type="button" class="seg-btn" data-cardstyle="classic">Classic</button>
+                <button type="button" class="seg-btn" data-cardstyle="glass">Glass</button>
+              </div>
+            </div>
+            <div class="select-row" style="border-bottom: 1px solid var(--divider-color, rgba(128,128,128,0.2));">
+              <label>Theme</label>
+              <div class="hint">Auto follows your Home Assistant theme</div>
+              <div class="seg" id="appearance_seg">
+                <button type="button" class="seg-btn" data-appearance="auto">Auto</button>
+                <button type="button" class="seg-btn" data-appearance="light">Light</button>
+                <button type="button" class="seg-btn" data-appearance="dark">Dark</button>
+              </div>
+            </div>
+            <div class="select-row" id="glassRow">
+              <label for="glass">Glass</label>
+              <div class="hint">How see-through the card is (needs a wallpaper or coloured view behind it)</div>
+              <div class="range-row">
+                <span>Clear</span>
+                <input type="range" id="glass" min="0" max="100" step="5" value="${Number.isFinite(parseFloat(this._config.glass)) ? parseFloat(this._config.glass) : 50}">
+                <span>Frosted</span>
               </div>
             </div>
             <div class="select-row" style="border-top: 1px solid var(--divider-color, rgba(128,128,128,0.2));">
@@ -3014,6 +3639,43 @@ class TigerTodoCardEditor extends HTMLElement {
           </div>
         </div>
 
+        <div>
+          <div class="section-title">Colours</div>
+          <div class="card-block">
+            <div class="select-row" style="border-bottom: 1px solid var(--divider-color, rgba(128,128,128,0.2));">
+              <label>Preset</label>
+              <div class="hint">One tap sets all five colours — then adjust any of them below</div>
+              <div class="preset-grid">
+                ${COLOR_PRESETS.map(pr => `
+                  <button type="button" class="preset-opt" data-preset="${pr.id}" aria-pressed="false">
+                    <span class="preset-dots">${['delete', 'low', 'medium', 'high'].map(k => `<i style="background:${(pr.colors && pr.colors[k]) || TODO_DEFAULTS[k]}"></i>`).join('')}<i style="background:${pr.accent}"></i></span>
+                    ${pr.name}
+                  </button>`).join('')}
+              </div>
+            </div>
+            ${[['accent', 'Accent', 'Check marks, the add button and highlights'], ['delete', 'Delete', 'Swipe-to-delete and destructive buttons'], ['low', 'Low GI', 'Low glycaemic index in the item lookup'], ['medium', 'Medium GI', 'Medium glycaemic index in the item lookup'], ['high', 'High GI', 'High glycaemic index in the item lookup']].map(([k, label, desc]) => `
+            <div class="colour-card">
+              <label class="colour-swatch">
+                <input type="color" data-cinput="${k}" value="#000000">
+                <span class="colour-swatch-preview" data-cprev="${k}"></span>
+              </label>
+              <div class="colour-info">
+                <div class="colour-label">${label}</div>
+                <div class="hint" style="margin:0;">${desc}</div>
+                <div class="colour-hex-row">
+                  <span class="colour-dot" data-cdot="${k}"></span>
+                  <input class="colour-hex" data-chex="${k}" spellcheck="false" autocomplete="off">
+                </div>
+              </div>
+              <div class="color-prev" title="Dark theme / light theme"><span class="pv" data-pvd="${k}">Aa</span><span class="pv" data-pvl="${k}">Aa</span></div>
+              <button type="button" class="reset-btn" data-creset="${k}" hidden>Reset</button>
+            </div>`).join('')}
+            <div class="select-row" style="border-top: 1px solid var(--divider-color, rgba(128,128,128,0.2));">
+              <div class="hint">Colours are adjusted automatically so they stay readable in both light and dark themes. The two “Aa” swatches preview each colour on a dark (left) and light (right) card.</div>
+            </div>
+          </div>
+        </div>
+
         <!-- ── Picker pages (pushed over the editor, iOS Settings-style) ── -->
         <div id="entityPickerPage" class="picker-page">
           <div class="picker-page-header">
@@ -3056,13 +3718,23 @@ class TigerTodoCardEditor extends HTMLElement {
       this._config = { ...this._config, max_list_height: Number.isFinite(n) && n > 0 ? n : 340 };
       this._emit();
     });
-    on('accent_color', 'change', e => { this._config = { ...this._config, accent_color: e.target.value }; this._updateUi(); this._emit(); });
-    on('accent_color_picker', 'input', e => {
-      this._config = { ...this._config, accent_color: e.target.value };
-      const hexInput = root.getElementById('accent_color');
-      if (hexInput) hexInput.value = e.target.value;
-      this._updateUi(); this._emit();
+    root.querySelectorAll('.seg-btn[data-appearance]').forEach(b => b.addEventListener('click', () => {
+      this._updateConfig('appearance', b.dataset.appearance); this._updateUi();
+    }));
+    root.querySelectorAll('.seg-btn[data-cardstyle]').forEach(b => b.addEventListener('click', () => {
+      this._updateConfig('card_style', b.dataset.cardstyle); this._updateUi();
+    }));
+    on('glass', 'input', e => this._updateConfig('glass', Number(e.target.value)));
+    root.querySelectorAll('.preset-opt').forEach(b => b.addEventListener('click', () => this._applyPreset(b.dataset.preset)));
+    root.querySelectorAll('[data-cinput]').forEach(inp => {
+      const k = inp.dataset.cinput;
+      inp.addEventListener('input',  () => this._paintColour(k, inp.value, null));   // live preview only
+      inp.addEventListener('change', () => this._setColour(k, inp.value));
     });
+    root.querySelectorAll('[data-chex]').forEach(inp => {
+      inp.addEventListener('change', () => this._setColour(inp.dataset.chex, inp.value.trim().startsWith('#') ? inp.value.trim() : '#' + inp.value.trim()));
+    });
+    root.querySelectorAll('[data-creset]').forEach(b => b.addEventListener('click', () => this._resetColour(b.dataset.creset)));
     on('show_add_bar', 'change', e => { this._config = { ...this._config, show_add_bar: e.target.checked }; this._emit(); });
     on('group_by_category', 'change', e => { this._config = { ...this._config, group_by_category: e.target.checked }; this._emit(); });
     on('restock_suggestions', 'change', e => { this._config = { ...this._config, restock_suggestions: e.target.checked }; this._emit(); });
@@ -3089,12 +3761,12 @@ class TigerTodoCardEditor extends HTMLElement {
   }
 }
 
-customElements.define('crow-todo-card', TigerTodoCard);
-customElements.define('crow-todo-card-editor', TigerTodoCardEditor);
+customElements.define('crow-todo-card', CrowTodoCard);
+customElements.define('crow-todo-card-editor', CrowTodoCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'crow-todo-card',
   name: 'Crow Todo Card',
-  description: 'Apple-style shopping/todo list card with optional AI quick-add, categorization, and duplicate detection.'
+  description: 'Classic or liquid-glass shopping and task list — light and dark themes, your own colours, swipe to delete, and optional AI categorising, item lookup and restock suggestions.'
 });
