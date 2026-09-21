@@ -1,8 +1,6 @@
 # Crow Todo Card
 
-*** Experimental ***
-
-Crow Todo Card is a Home Assistant `todo` entity card with an Apple-style design — glassmorphism panels, an SF Pro font stack and a `#007AFF` accent by default. It's built as a shopping list first, with an optional second linked task list, AI-powered categorisation and item lookups, swipe-to-delete rows, restock reminders and PDF export.
+Crow Todo Card is a Home Assistant `todo` entity card with an Apple-style design. It's built as a shopping list first, with an optional second linked task list, AI-powered categorisation and item lookups, swipe-to-delete rows, restock reminders and PDF export.
 
 > ✨ **AI features are optional and off by default.** Turn on **AI Features** in the editor to unlock categorisation, duplicate detection and long-press item/task lookups — they need a conversation agent already configured in Home Assistant (e.g. Google Gemini, OpenAI, Claude, or Home Assistant's built-in AI). With AI off, the card still works fully as a plain shopping/todo list.
 
