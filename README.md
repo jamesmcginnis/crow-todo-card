@@ -1,8 +1,10 @@
 # Crow Todo Card
 
-Crow Todo Card is a Home Assistant `todo` entity card with an Apple-style design. It's built as a shopping list first, with an optional second linked task list, AI-powered categorisation and item lookups, swipe-to-delete rows, restock reminders and PDF export.
+*** Experimental AI Features ***
 
-> ✨ **AI features are optional and off by default.** Turn on **AI Features** in the editor to unlock categorisation, duplicate detection and long-press item/task lookups — they need a conversation agent configured in Home Assistant (see [AI Features Setup](#-ai-features-setup-optional) below). With AI off, the card still works fully as a plain shopping/todo list.
+Crow Todo Card is a Home Assistant `todo` entity card with an Apple-style design — glassmorphism panels, an SF Pro font stack and a `#007AFF` accent by default. It's built as a shopping list first, with an optional second linked task list, AI-powered categorisation and item lookups, swipe-to-delete rows, restock reminders and PDF export.
+
+> ✨ **AI features are optional and off by default.** Turn on **AI Features** in the editor to unlock categorisation, duplicate detection and long-press item/task lookups — they need a conversation agent such as Google Gemini (see [AI Features Setup](#-ai-features-setup-optional) below). With AI off, the card still works fully as a plain shopping/todo list.
 
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026+-blue)
 ![HACS](https://img.shields.io/badge/HACS-Custom-orange)
@@ -35,11 +37,46 @@ Crow Todo Card is a Home Assistant `todo` entity card with an Apple-style design
 
 ## 🤖 AI Features Setup (Optional)
 
-AI features are **off by default** — the card works fully without them as a plain shopping/todo list. To unlock item categorisation, duplicate detection and the long-press food/task info lookups, turn on **AI Features** in the editor, then select a conversation agent already configured in Home Assistant (e.g. Google Gemini, OpenAI, Claude, Home Assistant's built-in AI, Ollama — added via **Settings → Voice Assistants**).
+AI features are **off by default** — the card works fully without them, as a plain shopping/todo list. To unlock item categorisation, duplicate detection and the long-press food/task info lookups, turn on **AI Features** in the editor, then set up a conversation agent. **Google Gemini** is the recommended and best-tested agent:
 
-### Configure the Card
+### Step 1 — Enable the Generative Language API
 
-In the card's visual editor, turn on **AI Features** and select your conversation agent from the AI Agent dropdown. Then choose which AI-powered features to enable individually: **Categorise Items**, **Duplicate Detection**, **Food Info Lookup** (with optional photo), and **Task Info Lookup**.
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) and sign in
+2. Create a new project (or select an existing one)
+3. Go to **APIs & Services → Library**
+4. Search for **Generative Language API** and click **Enable**
+
+> ⚠️ This step is essential. An API key without the Generative Language API enabled will return errors immediately.
+
+### Step 2 — Create an API Key
+
+1. In Google Cloud Console go to **APIs & Services → Credentials**
+2. Click **+ Create Credentials → API key** and copy the key
+
+### Step 3 — Add Google Generative AI to Home Assistant
+
+1. In Home Assistant go to **Settings → Devices & Services → + Add Integration**
+2. Search for **Google Generative AI** and select it
+3. Paste your API key and click Submit
+4. Click the **gear icon ⚙️** next to **Google AI Conversation**
+5. Uncheck **Recommended model settings**, select **`gemini-2.0-flash`** and save
+
+### Step 4 — Configure the Card
+
+In the card's visual editor, turn on **AI Features** and select **Google AI Conversation** from the AI Agent dropdown. Then choose which AI-powered features to enable individually: **Categorise Items**, **Duplicate Detection**, **Food Info Lookup** (with optional photo), and **Task Info Lookup**.
+
+> 💡 Other conversation agents (Claude, OpenAI, Home Assistant's built-in AI, Ollama, etc., added via **Settings → Voice Assistants**) may also work, but Google Gemini is the recommended and best-tested option.
+
+### Free Tier Limits
+
+| Model | Requests/day | Requests/min |
+|-------|-------------|--------------|
+| `gemini-2.0-flash` | 1,500 | 15 |
+| `gemini-2.0-flash-lite` | 1,500 | 30 |
+
+**`gemini-2.0-flash` is recommended.** The card caches AI responses (categories and food/task lookups) per item, so daily quotas are rarely exhausted in normal use.
+
+> If you see an AI rate-limit error, your daily quota is exhausted — it resets daily.
 
 > 💡 AI responses are cached per item/task, so repeated lookups of the same item don't re-query your agent.
 
@@ -111,6 +148,11 @@ persistent_storage: false
 **AI features are missing from the editor or don't do anything**
 - Check **AI Features** is turned on in the editor, and that an AI Agent is selected — AI is off by default.
 - Make sure the individual AI toggle for the feature you want (Categorise Items, Duplicate Detection, Food Info Lookup, Task Info Lookup) is also on.
+- Ensure the **Generative Language API** is enabled in Google Cloud Console — this is the most common setup mistake.
+- Confirm **Google AI Conversation** is selected as the AI Agent in the visual editor.
+
+**AI features show a rate-limit error**
+- Your Gemini daily quota (1,500 requests for `gemini-2.0-flash`) is exhausted. It resets daily.
 
 **Sort by Category shows everything under "Other"**
 - Categorisation needs **AI Features** and **Categorise Items** both enabled, and only runs for items not already in the category cache — give it a moment after adding new items.
@@ -146,15 +188,6 @@ persistent_storage: false
 ## 📄 License
 
 MIT License — free to use, modify and distribute.
-
----
-
-## 🐦 Why "CROW"?
-
-- **C**lean design
-- **R**esponsive interface
-- **O**ptimised performance
-- **W**ell-crafted experience
 
 ---
 
